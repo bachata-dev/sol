@@ -1,0 +1,77 @@
+* {
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 13px;
+  min-height: 0;
+}
+
+window#waybar {
+  background: rgba(22, 22, 30, 0.72);
+  color: #c0caf5;
+  border-radius: 12px;
+  border: 1px solid rgba(122, 162, 247, 0.25);
+}
+
+#clock,
+#custom-canvas,
+#cpu,
+#memory,
+#pulseaudio,
+#network,
+#tray {
+  padding: 0 14px;
+}
+
+#clock {
+  color: #7aa2f7;
+  font-weight: 600;
+}
+
+#custom-universe {
+  color: #e0af68;
+  font-size: 15px;
+  padding: 0 10px;
+}
+
+#custom-canvas {
+  color: #565f89;
+}
+
+#custom-canvas.desk {
+  color: #7aa2f7;
+}
+
+#custom-canvas.ops {
+  color: #9ece6a;
+}
+
+#custom-canvas.info {
+  color: #bb9af7;
+}
+
+#custom-canvas.scratch {
+  color: #ff9e64;
+}
+
+#custom-canvas.gate {
+  color: #7dcfff;
+}
+
+#custom-canvas.deep-space {
+  color: #565f89;
+}
+
+#cpu {
+  color: #9ece6a;
+}
+
+#memory {
+  color: #bb9af7;
+}
+
+#pulseaudio {
+  color: #7dcfff;
+}
+
+#network {
+  color: #e0af68;
+}

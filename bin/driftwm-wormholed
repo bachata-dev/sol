@@ -1,0 +1,26 @@
+#!/bin/bash
+# Wormhole daemon: a camera lingering (~1.2s) inside a gate at working zoom
+# is teleported to the far gate. Gates: (-4800,0) <-> (4800,0), radius 380.
+# Lands 700px inside the destination (no retrigger), with a cooldown.
+
+C=0
+G=0
+while sleep 0.4; do
+  L=$(timeout 2 driftwm msg camera 2>/dev/null) || continue
+  Z=$(timeout 2 driftwm msg zoom 2>/dev/null | awk '{print $NF}') || continue
+  IN=$(awk -v l="$L" -v z="$Z" 'BEGIN {
+    n = split(l, a, " "); x = a[n-1]; y = a[n]
+    if (z < 0.5) { print 0; exit }
+    r2 = 380 * 380
+    if ((x + 4800)^2 + y^2 < r2) print 1
+    else if ((x - 4800)^2 + y^2 < r2) print 2
+    else print 0
+  }')
+  if [ "$IN" != 0 ] && [ "$IN" = "$G" ]; then C=$((C + 1)); else C=0; fi
+  G=$IN
+  if [ "$IN" != 0 ] && [ "$C" -ge 3 ]; then
+    if [ "$IN" = 1 ]; then driftwm msg camera 4100 0 >/dev/null; else driftwm msg camera -4100 0 >/dev/null; fi
+    command -v notify-send >/dev/null && notify-send -t 1500 "⌬ wormhole" "traversed the universe"
+    C=-10
+  fi
+done

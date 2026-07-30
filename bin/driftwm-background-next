@@ -1,0 +1,22 @@
+#!/bin/bash
+# Cycle driftwm shader wallpapers — omarchy-background-next parity for driftwm.
+# Rotates the ~/.config/driftwm/background.glsl symlink through sol +
+# the shipped shaders, then touches the config so driftwm hot-reloads it live.
+
+DIR="$HOME/.config/driftwm"
+LINK="$DIR/background.glsl"
+SHADERS=("$DIR/sol.glsl"
+         /usr/local/share/driftwm/wallpapers/animated/*.glsl
+         /usr/local/share/driftwm/wallpapers/static/*.glsl)
+
+CUR=$(readlink "$LINK")
+IDX=0
+for i in "${!SHADERS[@]}"; do
+  [ "${SHADERS[$i]}" = "$CUR" ] && IDX=$(( (i + 1) % ${#SHADERS[@]} ))
+done
+
+ln -sf "${SHADERS[$IDX]}" "$LINK"
+touch "$DIR/config.toml"
+command -v notify-send >/dev/null &&
+  notify-send -t 1500 "driftwm background" "$(basename "${SHADERS[$IDX]}" .glsl)"
+exit 0

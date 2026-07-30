@@ -1,0 +1,28 @@
+#!/bin/bash
+# driftwm-up — bring up driftwm on a spare VT (run with sudo, e.g. after boot).
+# Handles the whole dance: VT switch first (driftwm exits silently on an
+# inactive seat), evict the getty that autovt spawns, then launch in a proper
+# PAM/logind session. The universe self-assembles from driftwm's autostart.
+#
+# Usage: sudo driftwm-up [vt]   (default VT 3)
+
+set -e
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+
+VT="${1:-3}"
+RUN_UID="${SUDO_UID:-1000}"
+RUN_HOME=$(getent passwd "$RUN_UID" | cut -d: -f6)
+
+systemctl reset-failed "driftwm-tty$VT" 2>/dev/null || true
+chvt "$VT"
+sleep 1
+systemctl stop "getty@tty$VT" "autovt@tty$VT" 2>/dev/null || true
+
+systemd-run --collect --unit="driftwm-tty$VT" \
+  -p PAMName=login -p TTYPath="/dev/tty$VT" -p StandardInput=tty \
+  -p TTYReset=yes -p TTYVHangup=yes -p Conflicts="getty@tty$VT.service" \
+  --uid="$RUN_UID" \
+  /bin/sh -c "export XDG_RUNTIME_DIR=/run/user/$RUN_UID HOME=$RUN_HOME; exec driftwm > /tmp/driftwm-tty$VT.log 2>&1"
+
+sleep 4
+systemctl is-active "driftwm-tty$VT" && echo "driftwm universe is up (see /tmp/driftwm-tty$VT.log)"

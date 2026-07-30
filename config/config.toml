@@ -1,0 +1,191 @@
+# driftwm — "Tokyo Drift" (Tokyo Night, GPU shader canvas)
+# Canvas neighborhoods:  [3] Info (-2400,0)   [1] Desk (0,0)   [2] Ops (+2400,0)
+# mod+1/2/3 jump between them; mod+w overview; hot corner TL = overview, BR = launcher.
+
+window_placement = "auto"
+
+autostart = [
+  "waybar -c ~/.config/driftwm/waybar.jsonc -s ~/.config/driftwm/waybar.css",
+  "mako",
+  "foot -c ~/.config/driftwm/foot.ini -a main-term",
+  "foot -c ~/.config/driftwm/foot.ini -a ops-btop -e btop",
+  "foot -c ~/.config/driftwm/foot.ini -a info-fetch -e sh ~/.config/driftwm/info.sh",
+  "foot -a region-label-desk -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=7aa2f7 -e sh ~/.config/driftwm/label.sh Desk",
+  "foot -a region-label-ops -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=9ece6a -e sh ~/.config/driftwm/label.sh Ops",
+  "foot -a region-label-info -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=bb9af7 -e sh ~/.config/driftwm/label.sh Info",
+  "foot -a region-label-scratch -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=ff9e64 -e sh ~/.config/driftwm/label.sh Scratch",
+  "foot -a astrolabe -o main.font='JetBrains Mono:size=9' -o colors.alpha=0.55 -o colors.background=16161e -e bash ~/.config/driftwm/astrolabe.sh",
+  "driftwm-wormholed",
+  "driftwm-planetarium",
+]
+
+[session]
+restore_camera = true
+restore_bookmarks = true
+
+[navigation]
+anchors = [[0, 0], [2400, 0], [-2400, 0]]
+drift = 0.65          # floatier momentum coast
+camera_speed = 0.25   # slightly weightier camera flights
+
+[navigation.bookmarks]
+"1" = [0, 0]        # Desk
+"2" = [2400, 0]     # Ops (btop)
+"3" = [-2400, 0]    # Info (fastfetch)
+"4" = [0, -1600]    # Scratch
+
+[zoom]
+# Below 45% zoom a window is "too small to touch": a left click on it centers
+# the camera there instead — one click in universe view = focus that region.
+interact_min = 0.45
+
+# Middle-click a window = full warp-in (focus + center + zoom to 100%).
+# Middle-click empty canvas = warp menu.
+[mouse.on-window]
+"middle" = "focus-center"
+
+[mouse.on-canvas]
+"middle" = "spawn driftwm-warp"
+
+# The scroll wheel is a circle too: mod+shift+wheel orbits window focus.
+[mouse.anywhere]
+"mod+shift+wheel-up" = "spawn driftwm-orbit next"
+"mod+shift+wheel-down" = "spawn driftwm-orbit prev"
+
+[decorations]
+bg_color = "#16161e"
+fg_color = "#c0caf5"
+corner_radius = 12
+shadow = true
+title_bar_height = 28
+font = "JetBrains Mono"
+font_size = 10
+border_width = 2
+border_color = "#292e42"
+border_color_focused = "#7aa2f7"
+
+[effects]
+blur_radius = 3
+blur_strength = 1.3
+animate_blur_fps = 30
+animation_speed = 0.35
+
+[background]
+type = "shader"
+path = "~/.config/driftwm/background.glsl"   # symlink; cycle with mod+ctrl+space
+animate_fps = 30
+
+[keybindings]
+"mod+return" = "exec foot -c ~/.config/driftwm/foot.ini"
+"mod+shift+return" = "exec foot -c ~/.config/driftwm/foot.ini -e btop"
+"mod+shift+c" = "reload-config"
+"mod+g" = "fill-window"
+"mod+s" = "suspend-window"
+"mod+l" = "spawn swaylock -f"
+
+# --- omarchy parity (OPTIONAL: needs omarchy's scripts on PATH; every other
+# binding below works standalone — a missing omarchy-* script just no-ops) ---
+"mod+space" = "exec-launcher"                          # fuzzel
+"mod+alt+space" = "spawn omarchy-menu"                 # omarchy menu
+"mod+k" = "spawn omarchy-menu-keybindings"             # show keybindings
+"mod+escape" = "spawn omarchy-menu system"             # system menu
+"mod+ctrl+escape" = "spawn swaylock -f"                # lock screen
+"mod+ctrl+shift+space" = "spawn omarchy-menu theme"    # theme menu
+"mod+ctrl+space" = "spawn driftwm-background-next"     # cycle shader wallpaper
+"mod+shift+s" = "spawn omarchy-screenshot region"      # region screenshot
+"mod+shift+w" = "spawn driftwm msg screenshot window -o - | wl-copy"  # window shot (native)
+"mod+shift+p" = "spawn omarchy-screenshot display"     # display screenshot
+"mod+alt+r" = "spawn omarchy-screenrecord"             # screen recording
+"XF86MonBrightnessUp" = "spawn brightnessctl s +10%"
+"XF86MonBrightnessDown" = "spawn brightnessctl s 10%-"
+
+# --- universe navigation ---
+"mod+u" = "zoom-to-fit"              # universe view (fit windows)
+"mod+shift+u" = "spawn driftwm msg zoom 0.18 && driftwm msg camera 0 0"  # cosmos view (whole universe, gates included)
+"mod+tab" = "spawn driftwm-warp"     # warp menu (region jump)
+"mod+o" = "spawn driftwm-orbit next"       # orbit focus clockwise
+"mod+shift+o" = "spawn driftwm-orbit prev" # orbit focus counter-clockwise
+"mod+ctrl+1" = "move-to-bookmark 1"        # fling focused window to Desk
+"mod+ctrl+2" = "move-to-bookmark 2"        # ... to Ops
+"mod+ctrl+3" = "move-to-bookmark 3"        # ... to Info
+"mod+ctrl+4" = "move-to-bookmark 4"        # ... to Scratch
+
+# ── MACHINE-SPECIFIC: set your own connector name and scale ──
+# Find your connector in `driftwm msg state` (under outputs.*) or wlr-randr.
+# scale 2.0 suits a 4K panel at ~22"; use 1.0 for non-HiDPI displays.
+[[outputs]]
+name = "eDP-1"
+scale = 2.0
+
+[outputs.hot_corners]
+top_left = "zoom-to-fit"
+bottom_right = "exec-launcher"
+
+[[window_rules]]
+app_id = "foot"
+blur = true
+
+[[window_rules]]
+app_id = "main-term"
+blur = true
+position = [0, 0]
+size = [1120, 680]
+
+[[window_rules]]
+app_id = "ops-btop"
+blur = true
+position = [2400, 0]
+size = [1420, 820]
+focus_on_open = false
+
+[[window_rules]]
+app_id = "info-fetch"
+blur = true
+position = [-2400, 0]
+size = [880, 560]
+focus_on_open = false
+
+[[window_rules]]
+app_id = "waybar"
+blur = true
+
+# Floating region labels: bare transparent text, out of nav/alt-tab, immovable
+[[window_rules]]
+app_id = "region-label-*"
+widget = true
+decoration = "none"
+focus_on_open = false
+
+[[window_rules]]
+app_id = "region-label-desk"
+position = [0, 460]
+size = [400, 90]
+
+[[window_rules]]
+app_id = "region-label-ops"
+position = [2400, 540]
+size = [400, 90]
+
+[[window_rules]]
+app_id = "region-label-info"
+position = [-2400, 400]
+size = [400, 90]
+
+[[window_rules]]
+app_id = "region-label-scratch"
+position = [0, -980]
+size = [400, 90]
+
+# ASTROLABE — pinned star-chart HUD, bottom-right, above the canvas
+[[window_rules]]
+app_id = "astrolabe"
+pinned_to_screen = true
+position = [700, -390]
+size = [420, 250]
+focus_on_open = false
+decoration = "minimal"
+blur = true
+border_width = 1
+border_color = "#292e42"
+border_color_focused = "#292e42"
+corner_radius = 10

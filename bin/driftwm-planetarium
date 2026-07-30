@@ -1,0 +1,87 @@
+#!/bin/bash
+# Planetarium idle mode: after IDLE_SECS with no user input, glide the camera
+# in a continuous slow orbit around Sol (PERIOD seconds per revolution).
+# Micro-steps at 5 Hz keep the compositor's camera lerp permanently mid-flight,
+# so the motion is one smooth glide rather than a series of hops.
+#
+# Idleness is INPUT idleness, not camera stillness: driftwm-spin (root) stamps
+# /tmp/sol-activity on any key/pointer/touch event, so typing in a terminal
+# counts as activity and the planetarium stays away. Any activity while the
+# orbit is running yields the camera back within one tick.
+#
+# Without driftwm-spin installed it falls back to camera stillness, which
+# cannot tell typing from idling — install the gesture daemon for the good
+# behavior, or raise IDLE_SECS.
+
+IDLE_SECS="${IDLE_SECS:-240}"
+PERIOD="${PERIOD:-480}"
+ORBIT_R="${ORBIT_R:-1000}"
+ACTIVITY="${SOL_ACTIVITY:-/tmp/sol-activity}"
+TICK=0.2
+ENGAGE_GRACE=8      # ticks of settling before the yield check arms
+
+idle_secs() {  # seconds since last input; fails when no activity file exists
+  [ -f "$ACTIVITY" ] || return 1
+  local now mt
+  now=$(date +%s)
+  mt=$(stat -c %Y "$ACTIVITY" 2>/dev/null) || return 1
+  echo $((now - mt))
+}
+
+auto=0
+theta=0
+grace=0
+still=0
+prev=""
+last_set=""
+
+while :; do
+  if [ "$auto" = 1 ]; then
+    if IDLE=$(idle_secs); then
+      # input-driven: any activity at all hands the camera straight back
+      if [ "$IDLE" -lt 2 ]; then
+        auto=0; still=0; prev=""
+        continue
+      fi
+    elif [ "$grace" -le 0 ] && [ -n "$last_set" ]; then
+      # fallback: yield when the camera strays from our own target
+      CAM=$(timeout 2 driftwm msg camera 2>/dev/null | awk '{print $(NF-1), $NF}')
+      if [ -n "$CAM" ]; then
+        DEV=$(awk -v c="$CAM" -v t="$last_set" 'BEGIN {
+          split(c, a, " "); split(t, b, " ")
+          print (sqrt((a[1]-b[1])^2 + (a[2]-b[2])^2) > 90) ? 1 : 0
+        }')
+        [ "$DEV" = 1 ] && { auto=0; still=0; prev=""; continue; }
+      fi
+    fi
+    [ "$grace" -gt 0 ] && grace=$((grace - 1))
+
+    theta=$(awk -v t="$theta" -v p="$PERIOD" -v k="$TICK" 'BEGIN { print t + 6.2831853 / p * k }')
+    last_set=$(awk -v t="$theta" -v r="$ORBIT_R" 'BEGIN { printf "%.1f %.1f", r * cos(t), r * sin(t) }')
+    driftwm msg camera $last_set > /dev/null 2>&1
+    sleep "$TICK"
+    continue
+  fi
+
+  sleep 2
+
+  if IDLE=$(idle_secs); then
+    [ "$IDLE" -lt "$IDLE_SECS" ] && continue
+  else
+    CAM=$(timeout 2 driftwm msg camera 2>/dev/null | awk '{print $(NF-1), $NF}')
+    [ -z "$CAM" ] && continue
+    if [ "$CAM" = "$prev" ]; then still=$((still + 2)); else still=0; prev="$CAM"; fi
+    [ "$still" -lt "$IDLE_SECS" ] && continue
+  fi
+
+  # engage: swing out to the orbit ring and start gliding
+  CAM=$(timeout 2 driftwm msg camera 2>/dev/null | awk '{print $(NF-1), $NF}')
+  [ -z "$CAM" ] && continue
+  auto=1
+  grace="$ENGAGE_GRACE"
+  theta=$(awk -v c="$CAM" 'BEGIN { split(c, a, " "); print atan2(a[2], a[1]) }')
+  driftwm msg zoom 0.5 > /dev/null 2>&1
+  last_set=$(awk -v t="$theta" -v r="$ORBIT_R" 'BEGIN { printf "%.1f %.1f", r * cos(t), r * sin(t) }')
+  driftwm msg camera $last_set > /dev/null 2>&1
+  sleep 1
+done

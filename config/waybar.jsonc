@@ -1,0 +1,53 @@
+{
+  "layer": "top",
+  "position": "top",
+  "height": 34,
+  "margin-top": 8,
+  "margin-left": 12,
+  "margin-right": 12,
+  "modules-left": ["clock", "custom/universe", "custom/canvas"],
+  "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray"],
+  "clock": {
+    "format": "  {:%H:%M   %a %d %b}",
+    "tooltip": false
+  },
+  "custom/universe": {
+    "format": "✦",
+    "on-click": "driftwm msg action zoom-to-fit",
+    "tooltip": false
+  },
+  "custom/canvas": {
+    "exec": "driftwm-region",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "driftwm msg action zoom-to-fit",
+    "on-click-right": "driftwm-warp",
+    "tooltip": false
+  },
+  "cpu": {
+    "format": "  {usage}%",
+    "interval": 3,
+    "tooltip": false
+  },
+  "memory": {
+    "format": "  {percentage}%",
+    "interval": 5,
+    "tooltip": false
+  },
+  "pulseaudio": {
+    "format": "  {volume}%",
+    "format-muted": "  mute",
+    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "tooltip": false
+  },
+  "network": {
+    "format-wifi": "  {essid}",
+    "format-ethernet": "󰈀  {ifname}",
+    "format-disconnected": "󰖪  offline",
+    "interval": 10,
+    "tooltip": false
+  },
+  "tray": {
+    "spacing": 12
+  }
+}

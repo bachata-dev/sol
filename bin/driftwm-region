@@ -1,0 +1,20 @@
+#!/bin/bash
+# Waybar widget: nearest universe region + zoom, as JSON with a CSS class so
+# the bar tints itself by where you are ("deep space" between regions).
+
+C=$(driftwm msg camera) || exit 0
+Z=$(driftwm msg zoom | awk '{print $NF}')
+echo "$C" | awk -v z="$Z" 'NR == 1 { x = $(NF-1); y = $NF }
+  END {
+    best = 1e9; name = ""
+    while ((getline line < tsv) > 0) {
+      split(line, f, "\t")
+      d = sqrt((x - f[2])^2 + (y - f[3])^2)
+      if (d < best) { best = d; name = f[1] }
+    }
+    if (best > 900) name = "deep space"
+    cls = tolower(name)
+    gsub(/ /, "-", cls)
+    if (cls ~ /^gate/) cls = "gate"
+    printf "{\"text\":\"󰀘 %s · %d%%\",\"class\":\"%s\"}", name, z * 100, cls
+  }' tsv="$HOME/.config/driftwm/regions.tsv"
