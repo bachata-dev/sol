@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""sol — navigate the driftwm canvas as our solar system.
+
+The canvas is a heliocentric map: the Sun sits at the origin and the eight
+planets sit at their real heliocentric longitudes (a snapshot of the sky),
+one per orbit, ordered outward exactly as everyone learned them. Distance
+from the Sun is distance from your attention: inner planets are immediate,
+the asteroid belt divides, outer planets are background.
+
+Everything here talks to driftwm over its JSON IPC socket. All camera motion
+goes through fly(), which interpolates position and zoom at 90 Hz with an
+ease-in-out curve and a dolly-out arc for long trips — so the view always
+travels, and never jumps.
+
+  sol goto <name|number|sun>   fly to a planet
+  sol hop <in|out>             fly to the next planet sunward / outward
+  sol system                   frame the whole solar system
+  sol send <name|number>       send the focused window to a planet
+  sol here [--waybar]          where am I?
+  sol menu                     fuzzel warp menu
+  sol map                      live system map (runs inside a terminal)
+  sol help [--hold]            keybinding card
+"""
+
+import glob
+import json
+import math
+import os
+import socket
+import sys
+import time
+
+# ── The solar system ──────────────────────────────────────────────────────
+# Positions are driftwm canvas coordinates (Y-up), computed from real mean
+# heliocentric longitudes for 2026-07-30 with uniform orbit spacing, so the
+# order and geometry are true while every hop is a comparable distance.
+# Regenerate for another date with tools/sol-positions.py.
+#     n  name       x      y    orbit  body  color      role
+PLANETS = [
+    (1, "Mercury",   948,   319, 1000,  68, "#9aa5ce", "quick"),
+    (2, "Venus",    -481, -1755, 1820, 103, "#e0af68", "comms"),
+    (3, "Earth",    1635, -2073, 2640, 105, "#7aa2f7", "home"),
+    (4, "Mars",     2551,  2338, 3460,  81, "#f7768e", "ops"),
+    (5, "Jupiter", -2202,  3670, 4280, 199, "#ff9e64", "builds"),
+    (6, "Saturn",   4935,  1286, 5100, 192, "#e6cfa1", "media"),
+    (7, "Uranus",   2307,  5452, 5920, 159, "#7dcfff", "spare"),
+    (8, "Neptune",  6730,   362, 6740, 158, "#5a7fd0", "archive"),
+]
+SUN = (0, "Sun", 0, 0, 0, 260, "#f0d99a", "home base")
+BELT_R = 3870          # asteroid belt radius, between Mars and Jupiter
+SYSTEM_R = 6740        # outermost orbit
+
+WORK_ZOOM = 1.0
+ARRIVE_RADIUS = 900    # how close counts as "on" a planet
+
+
+# ── IPC ───────────────────────────────────────────────────────────────────
+class Drift:
+    def __init__(self):
+        socks = sorted(glob.glob("/run/user/*/driftwm/ipc-*.sock"))
+        env = os.environ.get("DRIFTWM_SOCKET")
+        path = env if env else (socks[0] if socks else None)
+        if not path:
+            sys.exit("sol: driftwm is not running (no IPC socket found)")
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.settimeout(3)
+        self.s.connect(path)
+        self.f = self.s.makefile("rwb")
+
+    def req(self, obj):
+        self.f.write((json.dumps(obj) + "\n").encode())
+        self.f.flush()
+        line = self.f.readline().decode().strip()
+        if not line:
+            return None
+        r = json.loads(line)
+        return r.get("Ok")
+
+    def camera(self):
+        c = self.req({"Camera": None})
+        return (c["Camera"]["x"], c["Camera"]["y"]) if c else (0.0, 0.0)
+
+    def zoom(self):
+        z = self.req({"Zoom": None})
+        return z["Zoom"] if z else 1.0
+
+    def set_camera(self, x, y):
+        self.req({"Camera": [float(x), float(y)]})
+
+    def set_zoom(self, z):
+        self.req({"Zoom": float(z)})
+
+    def state(self):
+        st = self.req({"State": None})
+        return st["State"] if st else {}
+
+    def action(self, name):
+        self.req({"Action": name})
+
+
+# ── Smooth flight ─────────────────────────────────────────────────────────
+def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
+    """Glide the view to a point. Never jumps.
+
+    The camera is streamed as an eased path at `rate` Hz, paced against a
+    deadline rather than by sleeping a fixed slice, so a flight takes the time
+    it claims to even when the scheduler is busy.
+
+    Zoom is sent exactly once, because driftwm anchors zoom on the pointer and
+    re-derives the camera from it as it renders: a zoom command issued every
+    frame drags the camera backwards and the flight never arrives. One command
+    is also all that is needed — driftwm eases zoom itself over ~250ms.
+
+    That single command is ordered like a real flight: zoom out before setting
+    off, so you see the space you are about to cross, and zoom in on arrival.
+    Afterwards the target is held briefly, because the tail of the zoom
+    animation would otherwise pull the camera off the mark.
+    """
+    x0, y0 = d.camera()
+    z0 = d.zoom()
+    dist = math.hypot(tx - x0, ty - y0)
+    zooming = abs(tz - z0) > 0.005
+
+    # Duration scales gently with distance: short hops feel immediate, long
+    # journeys read as travel.
+    dur = 0.45 + 0.55 * min(1.0, dist / 6000.0)
+
+    if zooming and tz < z0:
+        d.set_zoom(tz)                                 # pull back, then travel
+
+    steps = max(2, int(dur * rate))
+    start = time.perf_counter()
+    for i in range(1, steps + 1):
+        t = i / steps
+        e = 0.5 - 0.5 * math.cos(math.pi * t)          # ease in-out
+        d.set_camera(x0 + (tx - x0) * e, y0 + (ty - y0) * e)
+        ahead = (start + t * dur) - time.perf_counter()
+        if ahead > 0:
+            time.sleep(ahead)
+
+    if zooming and tz > z0:
+        d.set_zoom(tz)                                 # settle in on arrival
+
+    hold = 0.4 if zooming else 0.06
+    until = time.perf_counter() + hold
+    while time.perf_counter() < until:
+        d.set_camera(tx, ty)
+        time.sleep(1.0 / rate)
+
+
+# ── Places ────────────────────────────────────────────────────────────────
+def find_planet(token):
+    t = str(token).strip().lower()
+    if t in ("sun", "0", "home"):
+        return SUN
+    for p in PLANETS:
+        if t == str(p[0]) or p[1].lower().startswith(t):
+            return p
+    return None
+
+
+def nearest(x, y):
+    """Nearest place to a point, and whether we're actually there."""
+    best, bd = SUN, math.hypot(x, y)
+    for p in PLANETS:
+        dd = math.hypot(x - p[2], y - p[3])
+        if dd < bd:
+            best, bd = p, dd
+    return best, bd
+
+
+# ── Commands ──────────────────────────────────────────────────────────────
+def cmd_goto(args):
+    p = find_planet(args[0]) if args else None
+    if not p:
+        sys.exit("sol goto: name a planet (1-8, Mercury..Neptune, or sun)")
+    d = Drift()
+    fly(d, p[2], p[3])
+
+
+def cmd_hop(args):
+    direction = (args[0] if args else "out").lower()
+    d = Drift()
+    x, y = d.camera()
+    here, dist = nearest(x, y)
+    idx = here[0]
+    if direction in ("in", "sunward", "left", "prev"):
+        nxt = idx - 1
+    else:
+        nxt = idx + 1
+    nxt = max(0, min(8, nxt))
+    p = SUN if nxt == 0 else PLANETS[nxt - 1]
+    fly(d, p[2], p[3])
+
+
+def cmd_system(args):
+    """Frame the whole solar system, centred on the Sun.
+
+    driftwm clamps zoom-out to half the fit of the real windows on the canvas,
+    which is why the planet name plates are ordinary windows: they hold the
+    canvas open wide enough for this view to exist.
+    """
+    d = Drift()
+    st = d.state()
+    out = (st.get("outputs") or [{}])[0]
+    w, h = (out.get("size") or [1920, 1080])
+    z = min(w, h) / (2.3 * SYSTEM_R)
+    fly(d, 0, 0, max(0.05, z))
+
+
+def cmd_send(args):
+    if not args:
+        sys.exit("sol send: name a planet")
+    p = find_planet(args[0])
+    if not p:
+        sys.exit("sol send: unknown planet")
+    d = Drift()
+    st = d.state()
+    win = next((w for w in st.get("windows", []) if w.get("is_focused")), None)
+    if not win:
+        sys.exit("sol send: no focused window")
+    import subprocess
+    subprocess.run(["driftwm", "msg", "move", "--id", str(win["id"]),
+                    str(p[2]), str(p[3])],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    fly(d, p[2], p[3])
+
+
+def cmd_here(args):
+    d = Drift()
+    x, y = d.camera()
+    z = d.zoom()
+    place, dist = nearest(x, y)
+    if dist > ARRIVE_RADIUS:
+        name, cls, role = "deep space", "space", ""
+    else:
+        name, cls, role = place[1], place[1].lower(), place[7]
+    label = f"{place[0]} {name}" if place is not SUN and cls != "space" else name
+    if "--waybar" in args:
+        text = f"☉ {label} · {int(z * 100)}%"
+        print(json.dumps({"text": text, "class": cls,
+                          "tooltip": role or "between worlds"}))
+    else:
+        print(f"{label}  ({role})" if role else label)
+
+
+def cmd_menu(args):
+    items = ["Sun — home base"] + [f"{p[0]} {p[1]} — {p[7]}" for p in PLANETS] \
+            + ["System view"]
+    import subprocess
+    try:
+        out = subprocess.run(["fuzzel", "--dmenu", "--prompt", "fly to ▸ ",
+                              "--lines", "10"],
+                             input="\n".join(items), text=True,
+                             capture_output=True).stdout.strip()
+    except FileNotFoundError:
+        sys.exit("sol menu: fuzzel not installed")
+    if not out:
+        return
+    if out.startswith("System"):
+        cmd_system([])
+    elif out.startswith("Sun"):
+        cmd_goto(["sun"])
+    else:
+        cmd_goto([out.split()[0]])
+
+
+HELP = """
+   ☉  S O L  —  the canvas is our solar system
+
+   Sun at the centre, planets in the order you already know.
+   Distance from the Sun is distance from your attention:
+   inner = immediate, the asteroid belt divides, outer = background.
+
+   GO                                  DO
+   mod+1 … mod+8   fly to a planet     mod+return   terminal
+   mod+0           fly to the Sun      mod+space    launcher
+   mod+left/right  sunward / outward   mod+q        close window
+   mod+u           whole system view   mod+f        fullscreen
+   mod+tab         fly-to menu         mod+m        maximise
+   click the map   fly there           mod+/        this card
+
+   CARRY                               LOOK
+   mod+ctrl+1 … 8  send window         drag         pan
+                   to that planet      scroll       pan · pinch zoom
+                                       mod+drag     pan anywhere
+
+   The map (bottom right) is live: your windows, the planets,
+   and the box showing where you are looking.
+
+   1 Mercury quick   3 Earth home    5 Jupiter builds  7 Uranus spare
+   2 Venus   comms   4 Mars   ops    6 Saturn  media   8 Neptune archive
+"""
+
+
+def cmd_help(args):
+    print(HELP)
+    if "--hold" in args:
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+
+
+# ── Live map ──────────────────────────────────────────────────────────────
+C_DIM, C_FG, C_CAM = "\033[38;2;65;72;104m", "\033[38;2;192;202;245m", "\033[38;2;125;207;255m"
+C_SUN, C_RST = "\033[38;2;224;175;104m", "\033[0m"
+PCOL = {1: "\033[38;2;154;165;206m", 2: "\033[38;2;224;175;104m",
+        3: "\033[38;2;122;162;247m", 4: "\033[38;2;247;118;142m",
+        5: "\033[38;2;255;158;100m", 6: "\033[38;2;230;207;161m",
+        7: "\033[38;2;125;207;255m", 8: "\033[38;2;90;127;208m"}
+
+# Terminal cells are about twice as tall as they are wide, so the column /
+# row ratio is held at 2:1 — otherwise every orbit renders as a flat ellipse.
+MW, MH = 40, 20
+SPAN = SYSTEM_R * 1.18
+
+
+def to_cell(x, y):
+    c = int((x + SPAN) / (2 * SPAN) * MW)
+    r = int((SPAN - y) / (2 * SPAN) * MH)
+    return (r, c) if 0 <= r < MH and 0 <= c < MW else (None, None)
+
+
+def to_world(col, row):
+    x = (col + 0.5) / MW * 2 * SPAN - SPAN
+    y = SPAN - (row + 0.5) / MH * 2 * SPAN
+    return x, y
+
+
+def draw_map(d):
+    st = d.state()
+    cx, cy = st.get("camera", [0, 0])
+    z = st.get("zoom", 1.0) or 1.0
+    out = (st.get("outputs") or [{}])[0]
+    ow, oh = (out.get("size") or [1920, 1080])
+
+    grid = [[(" ", C_DIM) for _ in range(MW)] for _ in range(MH)]
+
+    # orbit rings, sampled
+    for p in PLANETS:
+        rr = p[4]
+        for k in range(160):
+            a = 2 * math.pi * k / 160
+            r_, c_ = to_cell(rr * math.cos(a), rr * math.sin(a))
+            if r_ is not None and grid[r_][c_][0] == " ":
+                grid[r_][c_] = ("·", C_DIM)
+    # asteroid belt
+    for k in range(120):
+        a = 2 * math.pi * k / 120
+        r_, c_ = to_cell(BELT_R * math.cos(a), BELT_R * math.sin(a))
+        if r_ is not None and grid[r_][c_][0] in (" ", "·"):
+            grid[r_][c_] = ("˙", C_DIM)
+
+    # viewport box
+    hw, hh = ow / (2 * z), oh / (2 * z)
+    r1, c1 = to_cell(cx - hw, cy + hh)
+    r2, c2 = to_cell(cx + hw, cy - hh)
+    if None not in (r1, c1, r2, c2):
+        for c in range(min(c1, c2), max(c1, c2) + 1):
+            for r in (r1, r2):
+                grid[r][c] = ("─", C_CAM)
+        for r in range(min(r1, r2), max(r1, r2) + 1):
+            for c in (c1, c2):
+                grid[r][c] = ("│", C_CAM)
+
+    # windows
+    for w in st.get("windows", []):
+        if w.get("is_widget") or str(w.get("app_id", "")).startswith(("sol-", "planet-label")):
+            continue
+        r_, c_ = to_cell(*w["position"])
+        if r_ is not None:
+            grid[r_][c_] = ("▪", C_FG)
+
+    # sun + planets
+    r_, c_ = to_cell(0, 0)
+    if r_ is not None:
+        grid[r_][c_] = ("☉", C_SUN)
+    for p in PLANETS:
+        r_, c_ = to_cell(p[2], p[3])
+        if r_ is not None:
+            grid[r_][c_] = (str(p[0]), PCOL[p[0]])
+
+    place, dist = nearest(cx, cy)
+    where = "deep space" if dist > ARRIVE_RADIUS else (
+        f"{place[0]} {place[1]} · {place[7]}" if place is not SUN else "Sun · home base")
+    head = f" ☉ {where}".ljust(MW + 1) + f"{int(z * 100)}%"
+
+    buf = ["\033[H", C_FG + head + C_RST, "\n"]
+    for row in grid:
+        buf.append(" ")
+        for ch, col in row:
+            buf.append(col + ch + C_RST)
+        buf.append("\n")
+    buf.append(C_DIM + " click to fly · mod+1…8 planets · mod+u system" + C_RST)
+    sys.stdout.write("".join(buf))
+    sys.stdout.flush()
+
+
+def cmd_map(args):
+    d = Drift()
+    sys.stdout.write("\033[?25l\033[2J\033[?1006h\033[?1000h")
+    sys.stdout.flush()
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+    except Exception:
+        old = None
+    pending = ""
+    last = 0.0
+    try:
+        while True:
+            if time.time() - last > 0.5:
+                draw_map(d)
+                last = time.time()
+            r, _, _ = select.select([sys.stdin], [], [], 0.15)
+            if r:
+                pending += sys.stdin.read(1)
+                if pending.endswith("M") and pending.startswith("\033[<"):
+                    try:
+                        body = pending[3:-1]
+                        btn, col, row = (int(v) for v in body.split(";"))
+                        if btn == 0:
+                            wx, wy = to_world(col - 2, row - 2)
+                            fly(d, wx, wy, d.zoom() if d.zoom() < 0.5 else 1.0)
+                            last = 0
+                    except ValueError:
+                        pass
+                    pending = ""
+                elif len(pending) > 24 or pending.endswith("m"):
+                    pending = ""
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if old:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\033[?1000l\033[?1006l\033[?25h")
+
+
+# ── Entry ─────────────────────────────────────────────────────────────────
+CMDS = {"goto": cmd_goto, "hop": cmd_hop, "system": cmd_system, "send": cmd_send,
+        "here": cmd_here, "menu": cmd_menu, "map": cmd_map, "help": cmd_help}
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(HELP)
+        print("  commands: " + "  ".join(sorted(CMDS)))
+        return
+    cmd = sys.argv[1]
+    if cmd == "fly":
+        d = Drift()
+        a = sys.argv[2:]
+        fly(d, float(a[0]), float(a[1]), float(a[2]) if len(a) > 2 else WORK_ZOOM)
+        return
+    fn = CMDS.get(cmd)
+    if not fn:
+        sys.exit(f"sol: unknown command '{cmd}' (try: {', '.join(sorted(CMDS))})")
+    fn(sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

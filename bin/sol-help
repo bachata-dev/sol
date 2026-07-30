@@ -1,0 +1,14 @@
+#!/bin/bash
+# Toggle the sol keybinding card. Press mod+/ again (or q) to dismiss it.
+
+if pgrep -f "foot -a sol-hel[p]" > /dev/null; then
+  pkill -f "foot -a sol-hel[p]"
+  exit 0
+fi
+
+exec foot -a sol-help \
+  -o main.font='JetBrains Mono:size=11' \
+  -o colors.alpha=0.94 \
+  -o colors.background=16161e \
+  -o colors.foreground=c0caf5 \
+  -e sh -c 'printf "\033[?25l"; sol help; read -r _'

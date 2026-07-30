@@ -1,56 +1,67 @@
-# driftwm — "Tokyo Drift" (Tokyo Night, GPU shader canvas)
-# Canvas neighborhoods:  [3] Info (-2400,0)   [1] Desk (0,0)   [2] Ops (+2400,0)
-# mod+1/2/3 jump between them; mod+w overview; hot corner TL = overview, BR = launcher.
+# sol — the driftwm canvas as our solar system.
+#
+# Sun at the origin; planets 1..8 outward in the order everyone knows.
+# Distance from the Sun is distance from your attention: inner planets are
+# immediate, the asteroid belt divides, outer planets are background.
+#
+#   mod+1..8  fly to a planet        mod+0  the Sun
+#   mod+left/right  sunward/outward  mod+u  whole system
+#   mod+tab   fly-to menu            mod+/  the keybinding card
+#
+# THE RULE THIS FILE ENFORCES: the camera moves only when you ask it to.
+# Every automatic camera move driftwm offers is switched off below, and all
+# navigation goes through `sol`, which interpolates the view at 90 Hz so it
+# always travels and never jumps.
 
-window_placement = "auto"
+# New windows land under the cursor and do NOT drag the camera along.
+window_placement = "cursor"
 
 autostart = [
   "waybar -c ~/.config/driftwm/waybar.jsonc -s ~/.config/driftwm/waybar.css",
   "mako",
-  "foot -c ~/.config/driftwm/foot.ini -a main-term",
-  "foot -c ~/.config/driftwm/foot.ini -a ops-btop -e btop",
-  "foot -c ~/.config/driftwm/foot.ini -a info-fetch -e sh ~/.config/driftwm/info.sh",
-  "foot -a region-label-desk -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=7aa2f7 -e sh ~/.config/driftwm/label.sh Desk",
-  "foot -a region-label-ops -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=9ece6a -e sh ~/.config/driftwm/label.sh Ops",
-  "foot -a region-label-info -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=bb9af7 -e sh ~/.config/driftwm/label.sh Info",
-  "foot -a region-label-scratch -o main.font='JetBrains Mono:size=22' -o colors.alpha=0.0 -o colors.foreground=ff9e64 -e sh ~/.config/driftwm/label.sh Scratch",
-  "foot -a astrolabe -o main.font='JetBrains Mono:size=9' -o colors.alpha=0.55 -o colors.background=16161e -e bash ~/.config/driftwm/astrolabe.sh",
-  "driftwm-wormholed",
-  "driftwm-planetarium",
+  # the live system map, bottom right
+  "foot -a sol-map -o main.font='JetBrains Mono:size=9' -o colors.alpha=0.72 -e sol map",
+  # planet name plates
+  "foot -a planet-label-1 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
+  "foot -a planet-label-2 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e0af68 -e sh ~/.config/driftwm/label.sh 2 VENUS comms",
+  "foot -a planet-label-3 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=7aa2f7 -e sh ~/.config/driftwm/label.sh 3 EARTH home",
+  "foot -a planet-label-4 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=f7768e -e sh ~/.config/driftwm/label.sh 4 MARS ops",
+  "foot -a planet-label-5 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=ff9e64 -e sh ~/.config/driftwm/label.sh 5 JUPITER builds",
+  "foot -a planet-label-6 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e6cfa1 -e sh ~/.config/driftwm/label.sh 6 SATURN media",
+  "foot -a planet-label-7 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=7dcfff -e sh ~/.config/driftwm/label.sh 7 URANUS spare",
+  "foot -a planet-label-8 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=5a7fd0 -e sh ~/.config/driftwm/label.sh 8 NEPTUNE archive",
+  # a terminal on Earth, so the first thing you see is home
+  "foot -c ~/.config/driftwm/foot.ini -a home-term",
 ]
+
+# ── OPT-IN EXTRAS ─────────────────────────────────────────────────────────
+# None of these run by default, because each one moves the camera without
+# being asked. Add them to autostart above if you want them:
+#
+#   "sol-planetarium"   after 4 idle minutes, slowly orbits the system
+#
+# The circle gesture (draw a circle to cycle windows) is the systemd service
+# sol-spin — enable with: sudo systemctl enable --now sol-spin
+# It also stamps input activity, which is what the planetarium uses to tell
+# real idleness from you simply not panning.
 
 [session]
 restore_camera = true
-restore_bookmarks = true
 
 [navigation]
-anchors = [[0, 0], [2400, 0], [-2400, 0]]
-drift = 0.65          # floatier momentum coast
-camera_speed = 0.25   # slightly weightier camera flights
-
-[navigation.bookmarks]
-"1" = [0, 0]        # Desk
-"2" = [2400, 0]     # Ops (btop)
-"3" = [-2400, 0]    # Info (fastfetch)
-"4" = [0, -1600]    # Scratch
+# `sol` owns the easing of every navigation flight, so driftwm only needs to
+# follow the stream closely. Kept a little under 1.0 so driftwm's own moves
+# (click-to-centre, fit, fullscreen) still ease instead of snapping.
+camera_speed = 0.35
+drift = 0.55
+auto_navigate_on_close = false     # closing a window never moves the view
+auto_navigate_on_click = false
 
 [zoom]
-# Below 45% zoom a window is "too small to touch": a left click on it centers
-# the camera there instead — one click in universe view = focus that region.
+reset_on_new_window = false        # a new window never yanks your zoom
+reset_on_activation = false        # nor does an app asking for focus
+# Below this zoom a window is too small to touch: click it to fly there.
 interact_min = 0.45
-
-# Middle-click a window = full warp-in (focus + center + zoom to 100%).
-# Middle-click empty canvas = warp menu.
-[mouse.on-window]
-"middle" = "focus-center"
-
-[mouse.on-canvas]
-"middle" = "spawn driftwm-warp"
-
-# The scroll wheel is a circle too: mod+shift+wheel orbits window focus.
-[mouse.anywhere]
-"mod+shift+wheel-up" = "spawn driftwm-orbit next"
-"mod+shift+wheel-down" = "spawn driftwm-orbit prev"
 
 [decorations]
 bg_color = "#16161e"
@@ -72,116 +83,136 @@ animation_speed = 0.35
 
 [background]
 type = "shader"
-path = "~/.config/driftwm/background.glsl"   # symlink; cycle with mod+ctrl+space
+path = "~/.config/driftwm/sol.glsl"
 animate_fps = 30
 
 [keybindings]
+# ── go ──
+"mod+1" = "spawn sol goto 1"
+"mod+2" = "spawn sol goto 2"
+"mod+3" = "spawn sol goto 3"
+"mod+4" = "spawn sol goto 4"
+"mod+5" = "spawn sol goto 5"
+"mod+6" = "spawn sol goto 6"
+"mod+7" = "spawn sol goto 7"
+"mod+8" = "spawn sol goto 8"
+"mod+0" = "spawn sol goto sun"
+"mod+left" = "spawn sol hop in"
+"mod+right" = "spawn sol hop out"
+"mod+u" = "spawn sol system"
+"mod+tab" = "spawn sol menu"
+"mod+slash" = "spawn sol-help"
+
+# ── carry ──
+"mod+ctrl+1" = "spawn sol send 1"
+"mod+ctrl+2" = "spawn sol send 2"
+"mod+ctrl+3" = "spawn sol send 3"
+"mod+ctrl+4" = "spawn sol send 4"
+"mod+ctrl+5" = "spawn sol send 5"
+"mod+ctrl+6" = "spawn sol send 6"
+"mod+ctrl+7" = "spawn sol send 7"
+"mod+ctrl+8" = "spawn sol send 8"
+
+# ── do ──
 "mod+return" = "exec foot -c ~/.config/driftwm/foot.ini"
-"mod+shift+return" = "exec foot -c ~/.config/driftwm/foot.ini -e btop"
+"mod+space" = "exec-launcher"
+"mod+q" = "close-window"
+"mod+f" = "toggle-fullscreen"
+"mod+m" = "fit-window"
 "mod+shift+c" = "reload-config"
-"mod+g" = "fill-window"
-"mod+s" = "suspend-window"
 "mod+l" = "spawn swaylock -f"
 
-# --- omarchy parity (OPTIONAL: needs omarchy's scripts on PATH; every other
-# binding below works standalone — a missing omarchy-* script just no-ops) ---
-"mod+space" = "exec-launcher"                          # fuzzel
-"mod+alt+space" = "spawn omarchy-menu"                 # omarchy menu
-"mod+k" = "spawn omarchy-menu-keybindings"             # show keybindings
-"mod+escape" = "spawn omarchy-menu system"             # system menu
-"mod+ctrl+escape" = "spawn swaylock -f"                # lock screen
-"mod+ctrl+shift+space" = "spawn omarchy-menu theme"    # theme menu
-"mod+ctrl+space" = "spawn driftwm-background-next"     # cycle shader wallpaper
-"mod+shift+s" = "spawn omarchy-screenshot region"      # region screenshot
-"mod+shift+w" = "spawn driftwm msg screenshot window -o - | wl-copy"  # window shot (native)
-"mod+shift+p" = "spawn omarchy-screenshot display"     # display screenshot
-"mod+alt+r" = "spawn omarchy-screenrecord"             # screen recording
+# ── media / system keys ──
+"XF86AudioRaiseVolume" = "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+"XF86AudioLowerVolume" = "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+"XF86AudioMute" = "spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
 "XF86MonBrightnessUp" = "spawn brightnessctl s +10%"
 "XF86MonBrightnessDown" = "spawn brightnessctl s 10%-"
+"Print" = "spawn grim - | wl-copy"
+"shift+Print" = "spawn grim -g \"$(slurp -d)\" - | wl-copy"
 
-# --- universe navigation ---
-"mod+u" = "zoom-to-fit"              # universe view (fit windows)
-"mod+shift+u" = "spawn driftwm msg zoom 0.18 && driftwm msg camera 0 0"  # cosmos view (whole universe, gates included)
-"mod+tab" = "spawn driftwm-warp"     # warp menu (region jump)
-"mod+o" = "spawn driftwm-orbit next"       # orbit focus clockwise
-"mod+shift+o" = "spawn driftwm-orbit prev" # orbit focus counter-clockwise
-"mod+ctrl+1" = "move-to-bookmark 1"        # fling focused window to Desk
-"mod+ctrl+2" = "move-to-bookmark 2"        # ... to Ops
-"mod+ctrl+3" = "move-to-bookmark 3"        # ... to Info
-"mod+ctrl+4" = "move-to-bookmark 4"        # ... to Scratch
+# Optional Omarchy integration — no-ops when omarchy isn't installed.
+"mod+k" = "spawn omarchy-menu-keybindings"
+"mod+escape" = "spawn omarchy-menu system"
 
-# ── MACHINE-SPECIFIC: set your own connector name and scale ──
-# Find your connector in `driftwm msg state` (under outputs.*) or wlr-randr.
-# scale 2.0 suits a 4K panel at ~22"; use 1.0 for non-HiDPI displays.
+[mouse.on-window]
+"alt+left" = "move-window"
+"alt+right" = "resize-window"
+"middle" = "focus-center"
+
+[mouse.on-canvas]
+"left" = "pan-viewport"
+"middle" = "spawn sol menu"
+
+# ── MACHINE-SPECIFIC: your display ────────────────────────────────────────
+# Find the connector name under outputs.* in `driftwm msg state`.
+# scale 2.0 suits a 4K panel around 22-27"; use 1.0 for a standard display.
 [[outputs]]
 name = "eDP-1"
 scale = 2.0
 
 [outputs.hot_corners]
-top_left = "zoom-to-fit"
-bottom_right = "exec-launcher"
+top_left = "spawn sol system"
 
+# ── windows ───────────────────────────────────────────────────────────────
 [[window_rules]]
 app_id = "foot"
 blur = true
 
+# The terminal that opens on Earth (home)
 [[window_rules]]
-app_id = "main-term"
-blur = true
-position = [0, 0]
-size = [1120, 680]
+app_id = "home-term"
+position = [1635, -2073]
+size = [1200, 720]
 
+# Planet name plates. Deliberately NOT widgets: driftwm limits how far you can
+# zoom out to half the fit of real windows, so the name plates are what make
+# the whole-system view reachable on an otherwise empty canvas. They are also
+# the click target for each planet once you are zoomed out past interact_min.
 [[window_rules]]
-app_id = "ops-btop"
-blur = true
-position = [2400, 0]
-size = [1420, 820]
-focus_on_open = false
-
-[[window_rules]]
-app_id = "info-fetch"
-blur = true
-position = [-2400, 0]
-size = [880, 560]
-focus_on_open = false
-
-[[window_rules]]
-app_id = "waybar"
-blur = true
-
-# Floating region labels: bare transparent text, out of nav/alt-tab, immovable
-[[window_rules]]
-app_id = "region-label-*"
-widget = true
+app_id = "planet-label-*"
 decoration = "none"
 focus_on_open = false
+size = [520, 78]
 
 [[window_rules]]
-app_id = "region-label-desk"
-position = [0, 460]
-size = [400, 90]
+app_id = "planet-label-1"
+position = [948, 719]
 
 [[window_rules]]
-app_id = "region-label-ops"
-position = [2400, 540]
-size = [400, 90]
+app_id = "planet-label-2"
+position = [-481, -1355]
 
 [[window_rules]]
-app_id = "region-label-info"
-position = [-2400, 400]
-size = [400, 90]
+app_id = "planet-label-3"
+position = [1635, -1673]
 
 [[window_rules]]
-app_id = "region-label-scratch"
-position = [0, -980]
-size = [400, 90]
+app_id = "planet-label-4"
+position = [2551, 2738]
 
-# ASTROLABE — pinned star-chart HUD, bottom-right, above the canvas
 [[window_rules]]
-app_id = "astrolabe"
+app_id = "planet-label-5"
+position = [-2202, 4070]
+
+[[window_rules]]
+app_id = "planet-label-6"
+position = [4935, 1686]
+
+[[window_rules]]
+app_id = "planet-label-7"
+position = [2307, 5852]
+
+[[window_rules]]
+app_id = "planet-label-8"
+position = [6730, 762]
+
+# The live system map, pinned bottom-right
+[[window_rules]]
+app_id = "sol-map"
 pinned_to_screen = true
-position = [700, -390]
-size = [420, 250]
+position = [660, -350]
+size = [440, 450]
 focus_on_open = false
 decoration = "minimal"
 blur = true
@@ -189,3 +220,20 @@ border_width = 1
 border_color = "#292e42"
 border_color_focused = "#292e42"
 corner_radius = 10
+
+# The keybinding card, centred and pinned while it is open
+[[window_rules]]
+app_id = "sol-help"
+pinned_to_screen = true
+position = [0, 0]
+size = [900, 620]
+decoration = "minimal"
+blur = true
+corner_radius = 14
+border_width = 1
+border_color = "#7aa2f7"
+border_color_focused = "#7aa2f7"
+
+[[window_rules]]
+app_id = "waybar"
+blur = true

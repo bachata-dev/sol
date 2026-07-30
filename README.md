@@ -1,102 +1,97 @@
 <h1 align="center">sol</h1>
 
 <p align="center">
-  <b>Your desktop as a solar system.</b><br>
-  A Tokyo Night universe for <a href="https://github.com/malbiruk/driftwm">driftwm</a> —
-  the sun burns at your desk, your workspaces are planets, and everything between is GPU-shaded deep space.
+  <b>Your desktop is the solar system.</b><br>
+  A workspace model for <a href="https://github.com/malbiruk/driftwm">driftwm</a> —
+  the Sun at the origin, eight planets in the order you learned as a child,
+  and everything you already know about them doing the navigating for you.
 </p>
 
-![sol tour](screenshots/sol-tour.gif)
-
-<p align="center"><i>
-  Warping to Ops · orbital window hop · universe view · the whole cosmos · through a wormhole and home
-</i></p>
+![sol](screenshots/sol-tour.gif)
 
 ---
 
-## Why
+## The idea
 
-[driftwm](https://github.com/malbiruk/driftwm) is an infinite-canvas Wayland compositor: windows live
-anywhere on an endless 2D plane and your screen is a camera looking at it. It's a beautiful idea with
-one honest problem — **an infinite plane is featureless**. Pan away from your windows and there is
-nothing to tell you where you are, which way is home, or where you left that terminal.
+[driftwm](https://github.com/malbiruk/driftwm) gives you an infinite canvas: windows live anywhere on
+an endless plane and the screen is a camera looking at it. It's a lovely idea with one honest
+problem — **an infinite plane is featureless**. Pan away from your windows and nothing tells you
+where you are, which way is home, or where you left that terminal.
 
-`sol` answers that with a *place*. It gives the canvas a sun, orbits, regions with their own
-celestial identities, landmarks in deep space, and a star chart in the corner. Navigation stops being
-"pan and hope" and becomes flying around somewhere you know.
+`sol` answers that by making the canvas a place you already know. Not a metaphor you have to learn —
+*the* solar system, the one you can already recite.
 
-Everything visual is one GLSL fragment shader — the astronomy costs no windows, no compositing
-layers, and no meaningful CPU. Everything behavioral is a small pile of shell and Python talking to
-driftwm over its IPC socket.
+**The Sun sits at the origin. The eight planets sit at their real heliocentric longitudes**, one per
+orbit, ordered outward: Mercury, Venus, Earth, Mars, the asteroid belt, Jupiter, Saturn, Uranus,
+Neptune. `mod+1` … `mod+8` fly you to them in that same order. `mod+0` returns to the Sun.
 
-## The universe
+And the layout means something:
 
-**Sol** burns at your **Desk** region — a flickering golden star with a corona. Everything revolves
-around where you actually work.
+> **Distance from the Sun is distance from your attention.**
+> Inner planets are immediate and ephemeral, the asteroid belt divides, outer planets are heavy and
+> background.
 
-| Region | Body | Lives at |
+| | | |
 |---|---|---|
-| **Desk** | Sol, the sun | origin `(0, 0)` |
-| **Ops** | green planet with a Saturn ring | orbit r=2400, east |
-| **Info** | purple planet inside a breathing nebula | orbit r=2400, west |
-| **Scratch** | an asteroid belt | orbit r=1600, south |
-| **Gate West / East** | wormhole portals | `(∓4800, 0)` |
+| **1 Mercury** — quick | **2 Venus** — comms | **3 Earth** — home |
+| **4 Mars** — ops | · · · *asteroid belt* · · · | **5 Jupiter** — builds |
+| **6 Saturn** — media | **7 Uranus** — spare | **8 Neptune** — archive |
 
-Planets are lit by the sun with a real day/night terminator. Moons crawl the orbits in real time, a
-comet rides an ellipse with an anisotropic tail, and four distant galaxies sit in deep space as
-fixed landmarks.
+Those roles are only defaults; what matters is that "further out" always means "further from what
+I'm doing right now".
 
-**Scale strata.** The universe reveals itself as you zoom out and gets out of your way as you zoom
-in — powers-of-ten in a single shader:
+## The one rule
 
-| Zoom | What you see |
-|---|---|
-| working zoom | a clean, near-black workspace; astronomy fades to a whisper |
-| < 0.8 | region territories bloom; orbits brighten |
-| < 0.5 | planets, belt and moons read clearly |
-| < 0.34 | a cosmic web of filaments emerges between everything |
+**The camera moves only when you ask it to.** Every automatic camera move driftwm offers is switched
+off: new windows don't drag the view, opening a window doesn't reset your zoom, closing one doesn't
+pan somewhere, and nothing wanders while you're reading.
 
-![cosmos](screenshots/cosmos.png)
+When the view does move, it **travels**. Every flight is an eased path streamed at 90 Hz, so you
+always see where you went — which is what makes a large canvas navigable instead of disorienting.
 
-## Placement awareness
+## Controls
 
-- **ASTROLABE** — a pinned star-chart HUD (bottom right) plotting your windows `*`, the regions,
-  wormhole gates `@` and your current viewport, live. **Click anywhere on the chart to fly there.**
-- **A bar that knows where you are** — the waybar module names your region ("Ops", "deep space"…)
-  and tints itself that region's color, so you read your location peripherally.
-- **Constellation labels** float on the canvas above each region.
+Press **`mod+/`** at any time for this card on screen.
 
-## Navigation
+| Go | | Carry | |
+|---|---|---|---|
+| `mod+1` … `mod+8` | fly to a planet | `mod+ctrl+1` … `8` | send the focused window to a planet |
+| `mod+0` | fly to the Sun | | |
+| `mod+left` / `mod+right` | sunward / outward | **Do** | |
+| `mod+u` | whole system view | `mod+return` | terminal |
+| `mod+tab` | fly-to menu | `mod+space` | launcher |
+| click the map | fly there | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
 
-| Action | How |
-|---|---|
-| Universe view (fit all windows) | `mod+u` · the ✦ bar button · click the region module · top-left hot corner |
-| Cosmos view (whole universe, gates included) | `mod+shift+u` |
-| Warp menu (fly to any region) | `mod+tab` · middle-click empty canvas |
-| Jump to region 1–4 | `mod+1` … `mod+4` |
-| **Send focused window to a region** | `mod+ctrl+1` … `mod+ctrl+4` |
-| **Cycle windows in orbital order** | **draw a circle with the mouse** (clockwise = next) · `mod+o` / `mod+shift+o` · `mod+shift+scroll` |
-| Fly to a window from universe view | click it (under 45% zoom, windows become click-to-center) |
-| Warp into a window (focus + center + 100%) | middle-click it |
-| Cycle shader wallpapers | `mod+ctrl+space` |
-| Terminal · launcher · close window | `mod+return` · `mod+space` · `mod+q` |
+Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
+flies you to it.
 
-Window cycling is **spatial, not recency-based**: windows are sorted by their angle around Sol, so
-spinning the mouse clockwise walks you clockwise through the solar system. You always know where
-you'll land, because you can see it on the astrolabe.
+## What you see
 
-## Motion
+**The canvas** is a single GLSL fragment shader: the Sun with its corona, eight orbit rings, planets
+lit with a real day/night terminator facing the Sun, Saturn's ring, a sparse asteroid belt, and a
+parallaxed starfield. It costs no windows and no meaningful CPU.
 
-- **Flight arcs** — any hop longer than ~1500px zooms out, glides, and zooms back in, Google-Earth
-  style, so long journeys read as travel rather than teleportation.
-- **Wormholes** — park the camera inside a gate for ~1.2s and you're thrown to the far side of the
-  universe.
-- **Planetarium idle mode** — after 4 minutes with no input the camera begins a slow, continuous
-  orbit of the solar system (~8 min per revolution). Micro-steps at 5 Hz keep the compositor's camera
-  interpolation permanently mid-flight, so it glides rather than hops. Any key or mouse movement
-  hands the camera straight back.
+It also **gets out of your way**: at working zoom the astronomy fades to a whisper behind your
+windows, and blooms as you pull back — so the same canvas is a clean workspace up close and a map
+from far away.
 
-![ops region](screenshots/ops-region.png)
+![the whole system](screenshots/system.png)
+
+**The map** (bottom right) is live: the planets, your windows, and a box showing exactly what you're
+looking at. Click anywhere on it to fly there.
+
+**The bar** always names where you are — "3 Earth", "6 Saturn", "deep space" — tinted that planet's
+colour, so you can read your location without looking for it.
+
+**Name plates** float beside each planet. They're ordinary windows on purpose: driftwm limits how far
+you can zoom out to half the fit of the real windows on the canvas, so the plates are what hold the
+canvas open wide enough for the whole-system view to exist — and they double as click-to-fly targets.
+
+![a planet](screenshots/planet.png)
+
+Press `mod+/` for the card, any time:
+
+![keybindings](screenshots/help.png)
 
 ## Install
 
@@ -106,64 +101,69 @@ cd sol
 ./install.sh
 ```
 
-The installer backs up any existing `~/.config/driftwm`, installs the companion tools to
-`/usr/local/bin`, and asks before enabling the circle-gesture daemon.
-
 Then set your display in the `MACHINE-SPECIFIC` block of `~/.config/driftwm/config.toml` (connector
-name + HiDPI scale — find yours in `driftwm msg state`), and start driftwm from your display
+name and HiDPI scale — find yours in `driftwm msg state`) and start driftwm from your display
 manager's session list, or on a spare VT:
 
 ```sh
 sudo driftwm-up          # defaults to VT 3
 ```
 
-Bar, labels, astrolabe and daemons all self-assemble from driftwm's autostart.
+**Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
+optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono plus a Nerd Font for the bar glyphs.
+[Omarchy](https://omarchy.org) keybindings light up automatically if omarchy is installed, and are
+harmless if not.
 
-### Requirements
+## The `sol` command
 
-- [driftwm](https://github.com/malbiruk/driftwm) — this is a configuration and toolkit for it
-- Required: `foot`, `fuzzel`, `waybar`, `awk`, `python3` · optional autostart entries: `btop`,
-  `fastfetch`, `mako`
-- JetBrains Mono, plus a Nerd Font for the bar glyphs
-- The circle gesture and the idle detector read `/dev/input` (root systemd service, optional — skip
-  it and the planetarium falls back to camera stillness)
-- [Omarchy](https://omarchy.org) keybindings (`mod+k`, `mod+escape`, screenshots) light up
-  automatically if omarchy is on `PATH`, and are harmless if not
+Everything the keybindings do is available directly, and the whole toolkit is one command:
 
-## What's in the box
-
+```sh
+sol goto 4        # or: sol goto mars, sol goto sun
+sol hop out       # next planet outward; `sol hop in` goes sunward
+sol system        # frame the whole solar system
+sol send 8        # send the focused window to Neptune
+sol here          # where am I?
+sol menu          # fuzzel fly-to menu
+sol map           # the live map (runs inside a terminal)
+sol help          # the keybinding card
 ```
-config/    driftwm config, the sol.glsl shader, foot theme, waybar, astrolabe, region registry
-bin/       driftwm-warp         fuzzel warp menu with flight arcs
-           driftwm-orbit        cycle windows in orbital order around Sol
-           driftwm-spin         circle-gesture daemon + input-activity stamp (root)
-           driftwm-region       waybar module: current region + zoom, with a CSS class
-           driftwm-wormholed    gate dwell detector / teleporter
-           driftwm-planetarium  idle orbit
-           driftwm-background-next   cycle shader wallpapers
-           driftwm-up           launch driftwm on a spare VT
-```
+
+## Opt-in extras
+
+Nothing below runs unless you turn it on, because each one moves the camera without being asked.
+
+- **`sol-planetarium`** — after four idle minutes, glides the camera in a slow orbit of the system
+  (~8 minutes per revolution) and hands it straight back on any key or mouse movement. Add
+  `"sol-planetarium"` to `autostart` in the config.
+- **`sol-spin`** — draw a circle with the mouse to travel outward (clockwise) or sunward
+  (counter-clockwise). Root systemd service, since it reads `/dev/input`:
+  `sudo systemctl enable --now sol-spin`. It also stamps input activity, which is how the
+  planetarium tells real idleness from you simply not panning.
 
 ## Make it yours
 
-- **Add a region** — append `Name<TAB>x<TAB>y` to `~/.config/driftwm/regions.tsv`; the warp menu, bar
-  module and astrolabe pick it up immediately. Give it a body with a `glow()` / `planet()` call in
-  the shader, and a floating label in `config.toml`'s autostart.
-- **Shader** — every color and coefficient is a named `const` at the top of `sol.glsl`. Edits
-  hot-reload on save; a compile error falls back to the dot grid and reports on the error bar.
-- **Planetarium pace** — `IDLE_SECS` and `PERIOD` (seconds per revolution) env vars.
-- **Gesture feel** — `TURN_RAD`, `MIN_PATH`, `MAX_SPAN` at the top of `bin/driftwm-spin`.
+- **Different sky** — `python3 tools/sol-positions.py 2027-03-01` prints the planet table for
+  `bin/sol`, the constants for `config/sol.glsl`, and the name-plate placements for the config.
+  The layout is a snapshot of the real sky, so you can set it to a date that means something.
+- **Roles** — the labels ("home", "ops", "builds") are just strings in the autostart lines.
+- **Shader** — every colour and coefficient is a named `const` at the top of `sol.glsl`; edits
+  hot-reload on save.
+
+Orbit spacing is uniform rather than true-to-scale: real spacing would put Neptune eighty times
+further out than Mercury and make half the system unusable. The order and the angles are real; the
+radial scale is legible, which also means every hop between neighbours takes about the same time.
 
 ## Uninstall
 
 ```sh
-./uninstall.sh    # removes the tools and the gesture daemon; your config is left in place
+./uninstall.sh    # removes the commands and the daemon; your config stays put
 ```
 
 ## Status
 
 Developed and daily-driven on Debian 13 with AMD graphics and a 4K display. It should work anywhere
-driftwm runs, but display scale, fonts and the `/dev/input` bits are where another machine is most
+driftwm runs; display scale, fonts, and the `/dev/input` bits are where another machine is most
 likely to need a nudge. Issues and PRs welcome.
 
 ## Credits

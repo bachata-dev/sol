@@ -4,12 +4,12 @@
 # Micro-steps at 5 Hz keep the compositor's camera lerp permanently mid-flight,
 # so the motion is one smooth glide rather than a series of hops.
 #
-# Idleness is INPUT idleness, not camera stillness: driftwm-spin (root) stamps
+# Idleness is INPUT idleness, not camera stillness: sol-spin (root) stamps
 # /tmp/sol-activity on any key/pointer/touch event, so typing in a terminal
 # counts as activity and the planetarium stays away. Any activity while the
 # orbit is running yields the camera back within one tick.
 #
-# Without driftwm-spin installed it falls back to camera stillness, which
+# Without sol-spin installed it falls back to camera stillness, which
 # cannot tell typing from idling — install the gesture daemon for the good
 # behavior, or raise IDLE_SECS.
 

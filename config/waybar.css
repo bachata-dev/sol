@@ -25,53 +25,24 @@ window#waybar {
   color: #7aa2f7;
   font-weight: 600;
 }
-
-#custom-universe {
-  color: #e0af68;
+#custom-system {
+  color: #f0d99a;
   font-size: 15px;
   padding: 0 10px;
 }
 
-#custom-canvas {
+#custom-where {
   color: #565f89;
+  font-weight: 600;
 }
 
-#custom-canvas.desk {
-  color: #7aa2f7;
-}
-
-#custom-canvas.ops {
-  color: #9ece6a;
-}
-
-#custom-canvas.info {
-  color: #bb9af7;
-}
-
-#custom-canvas.scratch {
-  color: #ff9e64;
-}
-
-#custom-canvas.gate {
-  color: #7dcfff;
-}
-
-#custom-canvas.deep-space {
-  color: #565f89;
-}
-
-#cpu {
-  color: #9ece6a;
-}
-
-#memory {
-  color: #bb9af7;
-}
-
-#pulseaudio {
-  color: #7dcfff;
-}
-
-#network {
-  color: #e0af68;
-}
+#custom-where.sun     { color: #f0d99a; }
+#custom-where.mercury { color: #9aa5ce; }
+#custom-where.venus   { color: #e0af68; }
+#custom-where.earth   { color: #7aa2f7; }
+#custom-where.mars    { color: #f7768e; }
+#custom-where.jupiter { color: #ff9e64; }
+#custom-where.saturn  { color: #e6cfa1; }
+#custom-where.uranus  { color: #7dcfff; }
+#custom-where.neptune { color: #5a7fd0; }
+#custom-where.space   { color: #565f89; font-weight: 400; }

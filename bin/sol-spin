@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# driftwm-spin — circle-gesture daemon + input-activity stamp.
-# Draw a circle with the mouse (no buttons held): clockwise focuses the next
-# window in orbital order, counter-clockwise the previous (via driftwm-orbit).
+# sol-spin — circle-gesture daemon + input-activity stamp (opt-in extra).
+# Draw a circle with the mouse (no buttons held): clockwise travels outward
+# through the solar system, counter-clockwise travels sunward — the same hop
+# as mod+left / mod+right, via `sol hop`.
 # Reads raw relative motion from /dev/input (needs root / input group).
 #
 # It also stamps ACTIVITY_FILE on any key/pointer/touch event (rate-limited),
-# which is how driftwm-planetarium knows you are actually idle rather than
-# merely not panning the camera.
+# which is how sol-planetarium tells real idleness from you simply not
+# panning the camera.
 
 import glob
 import math
@@ -76,7 +77,7 @@ def fire(direction):
     env = dict(os.environ)
     env['DRIFTWM_SOCKET'] = socks[0]
     env['XDG_RUNTIME_DIR'] = os.path.dirname(os.path.dirname(socks[0]))
-    subprocess.Popen(['/usr/local/bin/driftwm-orbit', direction], env=env,
+    subprocess.Popen(['/usr/local/bin/sol', 'hop', direction], env=env,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -170,7 +171,8 @@ def main():
 
         if abs(turn) >= TURN_RAD and path >= MIN_PATH:
             # screen coords are y-down: positive turn = visually clockwise
-            fire('next' if turn > 0 else 'prev')
+            # screen coords are y-down, so a positive turn is visually clockwise
+            fire('out' if turn > 0 else 'in')
             quiet_until = now + COOLDOWN
             reset()
 

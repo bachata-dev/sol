@@ -1,0 +1,10 @@
+[Unit]
+Description=sol circle-gesture daemon (draw a circle to travel the solar system)
+
+[Service]
+ExecStart=/usr/local/bin/sol-spin
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
