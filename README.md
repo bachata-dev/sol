@@ -21,9 +21,11 @@ where you are, which way is home, or where you left that terminal.
 `sol` answers that by making the canvas a place you already know. Not a metaphor you have to learn —
 *the* solar system, the one you can already recite.
 
-**The Sun sits at the origin. The eight planets sit at their real heliocentric longitudes**, one per
-orbit, ordered outward: Mercury, Venus, Earth, Mars, the asteroid belt, Jupiter, Saturn, Uranus,
-Neptune. `mod+1` … `mod+8` fly you to them in that same order. `mod+0` returns to the Sun.
+**The Sun sits at a focus of eight real ellipses, and the planets sit where they really were**, one
+per orbit, ordered outward: Mercury, Venus, Earth, Mars, the asteroid belt, Jupiter, Saturn, Uranus,
+Neptune. Each one is placed by solving Kepler's equation for the date, so it rides its own orbit
+line at the angle it actually occupied. `mod+1` … `mod+8` fly you to them in that same order.
+`mod+0` returns to the Sun.
 
 And the layout means something:
 
@@ -56,20 +58,53 @@ Press **`mod+/`** at any time for this card on screen.
 | Go | | Carry | |
 |---|---|---|---|
 | `mod+1` … `mod+8` | fly to a planet | `mod+ctrl+1` … `8` | send the focused window to a planet |
-| `mod+0` | fly to the Sun | | |
-| `mod+left` / `mod+right` | sunward / outward | **Do** | |
-| `mod+u` | whole system view | `mod+return` | terminal |
-| `mod+tab` | fly-to menu | `mod+space` | launcher |
-| click the map | fly there | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
+| `mod+0` | fly to the Sun | **A crowded planet** | |
+| `mod+left` / `mod+right` | sunward / outward | `mod+a` | tidy this planet into a grid |
+| `mod+u` | whole system view | `mod+n` / `mod+p` | step through its windows |
+| `mod+tab` | fly-to menu | **Do** | |
+| click the map | fly there | `mod+return` `mod+space` | terminal · launcher |
+| | | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
 
 Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
 flies you to it.
 
+## When a planet fills up
+
+Ten terminals on Earth used to be ten terminals in a heap, each one 28 pixels down and to the right
+of the last. Now a planet holds a **district**, and sol knows what is in it:
+
+- **`mod+a` tidies it** into justified rows around the planet, shaped to your screen, with the name
+  plate lifted clear above. The planet's own disc is reserved as a cell, so windows flow *around* it
+  and it is never buried — from across the system a district reads as a lit world nested in its
+  work. Rows rather than a ring of moons because rows are compact — orbits here are 820 apart while
+  a terminal is 700 wide — and because a block shaped like your screen frames at a zoom where the
+  windows are still *usable*, not merely visible.
+- **The district gets a card**: a rounded panel in the planet's colour, painted behind the windows
+  by the shader. `sol arrange` writes the rectangles into `sol.glsl` between two markers and reloads
+  the config, which keeps your camera, windows and focus exactly as they were.
+- **The focused window comes forward** and the rest sit a touch back, at 90% opacity.
+- **`mod+3` frames the whole district** when it no longer fits at working zoom, so you arrive seeing
+  everything Earth is holding. Press `mod+3` again from that overview and you drop into your window
+  to get to work; press it again and you are back to the overview.
+- **`mod+n` / `mod+p` step through** them one at a time, flying to each.
+- **The map and the bar count them**, so a busy planet reads as busy from across the system.
+
+A window belongs where you put it. `mod+ctrl+3` and `mod+a` write that down, which matters because a
+tidy district is wider than the gap between planets — without it the far corner of Earth's grid
+would defect to Mercury. Drag a window off somewhere else and it belongs to whatever it is nearest
+again.
+
+![a planet with a full district](screenshots/district.png)
+
 ## What you see
 
-**The canvas** is a single GLSL fragment shader: the Sun with its corona, eight orbit rings, planets
-lit with a real day/night terminator facing the Sun, Saturn's ring, a sparse asteroid belt, and a
-parallaxed starfield. It costs no windows and no meaningful CPU.
+**The canvas** is a single GLSL fragment shader: the Sun with its corona, eight orbit ellipses drawn
+with the Sun at a focus — so Mercury's is visibly off-centre and Venus's is not — planets lit with a
+real day/night terminator facing the Sun, Saturn's ring, a sparse asteroid belt, and a parallaxed
+starfield. Every orbit is a soft hairline with a faint bloom and no hard edge, held at a constant
+weight in screen pixels so it never thickens as you pull back. Each planet pools its colour into the
+space around it, and each district gets a rounded card in that colour behind its windows. It costs
+no windows and no meaningful CPU.
 
 It also **gets out of your way**: at working zoom the astronomy fades to a whisper behind your
 windows, and blooms as you pull back — so the same canvas is a clean workspace up close and a map
@@ -77,15 +112,20 @@ from far away.
 
 ![the whole system](screenshots/system.png)
 
-**The map** (bottom right) is live: the planets, your windows, and a box showing exactly what you're
-looking at. Click anywhere on it to fly there.
+**The map** (bottom right) is live: the orbits, your windows, and a box showing exactly what you're
+looking at, with a tally of what each planet is holding along the bottom. Click anywhere on it to
+fly there — click a planet and you land framed on it.
 
-**The bar** always names where you are — "3 Earth", "6 Saturn", "deep space" — tinted that planet's
-colour, so you can read your location without looking for it.
+**The bar** always names where you are — "3 Earth", "6 Saturn", "the system", "deep space" — tinted
+that planet's colour and followed by its window count, so you can read your location without looking
+for it.
 
-**Name plates** float beside each planet. They're ordinary windows on purpose: driftwm limits how far
-you can zoom out to half the fit of the real windows on the canvas, so the plates are what hold the
-canvas open wide enough for the whole-system view to exist — and they double as click-to-fly targets.
+**Name plates** float beside each planet, naming it and counting what it holds — "3  E A R T H
+home · 10". They're ordinary windows on purpose: driftwm limits how far you can zoom out to half the
+fit of the real windows on the canvas, so the plates are what hold the canvas open wide enough for
+the whole-system view to exist — and they double as click-to-fly targets. Keeping the tally live
+costs nothing: `sol here`, which the bar already runs once a second, leaves the lines in a file and
+each plate just reads its own.
 
 ![a planet](screenshots/planet.png)
 
@@ -119,10 +159,14 @@ harmless if not.
 Everything the keybindings do is available directly, and the whole toolkit is one command:
 
 ```sh
-sol goto 4        # or: sol goto mars, sol goto sun
+sol goto 4        # or: sol goto mars, sol goto ops, sol goto sun
 sol hop out       # next planet outward; `sol hop in` goes sunward
 sol system        # frame the whole solar system
-sol send 8        # send the focused window to Neptune
+sol arrange       # tidy this planet's windows; `sol arrange all` does every one
+sol next          # step to the next window here; `sol prev` goes back
+sol send 8        # send the focused window to Neptune; `--stay` to not follow
+sol list          # what is where
+sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
 sol menu          # fuzzel fly-to menu
 sol map           # the live map (runs inside a terminal)
@@ -143,16 +187,37 @@ Nothing below runs unless you turn it on, because each one moves the camera with
 
 ## Make it yours
 
-- **Different sky** — `python3 tools/sol-positions.py 2027-03-01` prints the planet table for
-  `bin/sol`, the constants for `config/sol.glsl`, and the name-plate placements for the config.
-  The layout is a snapshot of the real sky, so you can set it to a date that means something.
+- **Different sky** — `python3 tools/sol-positions.py 2027-03-01` solves the orbits for that date and
+  prints the planet table for `bin/sol`, the orbit constants for `config/sol.glsl`, and the
+  name-plate placements for the config. The layout is a snapshot of the real sky, so you can set it
+  to a date that means something.
 - **Roles** — the labels ("home", "ops", "builds") are just strings in the autostart lines.
-- **Shader** — every colour and coefficient is a named `const` at the top of `sol.glsl`; edits
-  hot-reload on save.
+- **Sizes** — every disc comes from one rule in `tools/sol-positions.py`: the cube root of the body's
+  real radius, with Earth at 105. Change `EARTH_PX` to scale them all, or the exponent for a
+  different compression.
+- **Shader** — every colour and coefficient is a named `const` at the top of `sol.glsl`. Saving the
+  file is not enough on its own: press `mod+shift+c` to reload the config and the shader comes with
+  it. The only lines `sol` ever writes are the district rectangles between the two `── districts ──`
+  markers; delete the markers and you simply get no cards.
 
-Orbit spacing is uniform rather than true-to-scale: real spacing would put Neptune eighty times
-further out than Mercury and make half the system unusable. The order and the angles are real; the
-radial scale is legible, which also means every hop between neighbours takes about the same time.
+## What's real, and what isn't
+
+Real: the order, the angles, the eccentricities and the perihelion directions. Each planet is placed
+by solving Kepler's equation for the date, so it sits on its own ellipse where it actually was, and
+the Sun sits at a focus of all eight.
+
+Two things are deliberately not to scale, because true scale is unusable:
+
+- **Orbit spacing is uniform** — 1000, 1820, 2640 … 6740. In reality Neptune orbits 78× further out
+  than Mercury; here it is 6.7×. Even spacing keeps the whole system reachable and makes every hop
+  between neighbours take about the same time.
+- **Discs are the cube root of the real radii**, scaled so Earth is 105 across. One rule for every
+  body, so the ranking is exactly right — Jupiter is the giant, Mercury the pebble, and the Sun
+  dwarfs all of it — without the giants swallowing their own orbits. At true scale, with Neptune's
+  orbit where it is, Earth would be a hundredth of a pixel.
+
+The two scales are also independent of each other: relative to its own orbit, every planet is drawn
+hundreds of times too large. Distance means "how far from what I'm doing", not kilometres.
 
 ## Uninstall
 

@@ -7,6 +7,7 @@
 #   mod+1..8  fly to a planet        mod+0  the Sun
 #   mod+left/right  sunward/outward  mod+u  whole system
 #   mod+tab   fly-to menu            mod+/  the keybinding card
+#   mod+a     tidy this planet       mod+n/p  step through its windows
 #
 # THE RULE THIS FILE ENFORCES: the camera moves only when you ask it to.
 # Every automatic camera move driftwm offers is switched off below, and all
@@ -103,6 +104,13 @@ animate_fps = 30
 "mod+tab" = "spawn sol menu"
 "mod+slash" = "spawn sol-help"
 
+# ── a crowded planet ──
+# mod+a tidies the windows of wherever you are into a grid; mod+n / mod+p
+# step through them one at a time, flying to each.
+"mod+a" = "spawn sol arrange"
+"mod+n" = "spawn sol next"
+"mod+p" = "spawn sol prev"
+
 # ── carry ──
 "mod+ctrl+1" = "spawn sol send 1"
 "mod+ctrl+2" = "spawn sol send 2"
@@ -162,7 +170,7 @@ blur = true
 # The terminal that opens on Earth (home)
 [[window_rules]]
 app_id = "home-term"
-position = [1635, -2073]
+position = [1595, -2154]
 size = [1200, 720]
 
 # Planet name plates. Deliberately NOT widgets: driftwm limits how far you can
@@ -173,39 +181,39 @@ size = [1200, 720]
 app_id = "planet-label-*"
 decoration = "none"
 focus_on_open = false
-size = [520, 78]
+size = [660, 78]
 
 [[window_rules]]
 app_id = "planet-label-1"
-position = [948, 719]
+position = [934, 259]
 
 [[window_rules]]
 app_id = "planet-label-2"
-position = [-481, -1355]
+position = [-512, -1353]
 
 [[window_rules]]
 app_id = "planet-label-3"
-position = [1635, -1673]
+position = [1595, -1754]
 
 [[window_rules]]
 app_id = "planet-label-4"
-position = [2551, 2738]
+position = [2057, 3049]
 
 [[window_rules]]
 app_id = "planet-label-5"
-position = [-2202, 4070]
+position = [-2561, 3912]
 
 [[window_rules]]
 app_id = "planet-label-6"
-position = [4935, 1686]
+position = [4997, 1168]
 
 [[window_rules]]
 app_id = "planet-label-7"
-position = [2307, 5852]
+position = [2823, 5694]
 
 [[window_rules]]
 app_id = "planet-label-8"
-position = [6730, 762]
+position = [6692, 665]
 
 # The live system map, pinned bottom-right
 [[window_rules]]
