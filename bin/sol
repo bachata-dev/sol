@@ -72,6 +72,7 @@ PLATE_GAP = 40         # and between the top of a district and its name plate
 DIM = 0.90             # unfocused windows, so the focused one stands forward
 CARD_PAD = 70          # margin of the card a district sits on
 SHADER = os.path.expanduser("~/.config/driftwm/sol.glsl")
+FUZZEL = os.path.expanduser("~/.config/driftwm/fuzzel.ini")
 
 
 # ── IPC ───────────────────────────────────────────────────────────────────
@@ -821,10 +822,11 @@ def cmd_menu(args):
     items += ["─  Overview", "─  Whole system", "─  Tidy this planet",
               "─  Keybindings"]
     import subprocess
+    cmd = ["fuzzel", "--dmenu", "--lines", str(len(items))]
+    if os.path.exists(FUZZEL):        # ours if it is there, yours if it is not
+        cmd += ["--config", FUZZEL]
     try:
-        out = subprocess.run(["fuzzel", "--dmenu", "--prompt", "sol ▸ ",
-                              "--lines", "13"],
-                             input="\n".join(items), text=True,
+        out = subprocess.run(cmd, input="\n".join(items), text=True,
                              capture_output=True).stdout.strip()
     except FileNotFoundError:
         sys.exit("sol menu: fuzzel not installed")

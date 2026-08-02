@@ -7,7 +7,10 @@
   and everything you already know about them doing the navigating for you.
 </p>
 
-![sol](screenshots/sol-tour.gif)
+![sol](screenshots/hero.png)
+
+<p align="center"><i>Nineteen windows, six planets. Every district sits on a card in its planet's colour,
+so a busy world reads as busy from across the system.</i></p>
 
 ---
 
@@ -41,6 +44,10 @@ And the layout means something:
 
 Those roles are only defaults; what matters is that "further out" always means "further from what
 I'm doing right now".
+
+`mod+0` always comes back here — the Sun, home base, with Mercury a hop away and Earth just below.
+
+![the Sun, and the inner system](screenshots/sun.png)
 
 ## The one rule
 
@@ -141,6 +148,13 @@ the divide it is. Scroll it to travel sunward and outward, the way you scroll a 
 Only one module in the bar ever asks driftwm anything. `sol here` runs once a second, and leaves the
 other modules' answers in a file for them to read, so eight planets' worth of tally costs one query.
 
+![the bar](screenshots/bar.png)
+
+**The `☉` menu** is what the sun at the far left opens, and what `mod+tab` brings up: everywhere you
+can go, with what each place is holding, then the few things that are about the canvas itself.
+
+![the menu](screenshots/menu.png)
+
 **Name plates** float beside each planet, naming it and counting what it holds — "3  E A R T H
 home · 10". They're ordinary windows on purpose: driftwm limits how far you can zoom out to half the
 fit of the real windows on the canvas, so the plates are what hold the canvas open wide enough for
@@ -221,6 +235,9 @@ Nothing below runs unless you turn it on, because each one moves the camera with
   file is not enough on its own: press `mod+shift+c` to reload the config and the shader comes with
   it. The only lines `sol` ever writes are the district rectangles between the two `── districts ──`
   markers; delete the markers and you simply get no cards.
+- **The bar and the menu** — `waybar.jsonc` and `waybar.css` for the bar, `fuzzel.ini` for the ☉
+  menu. Only `sol menu` reads that fuzzel config, so your own stays untouched; delete it and the
+  menu falls back to whatever fuzzel already does.
 
 ## What's real, and what isn't
 
