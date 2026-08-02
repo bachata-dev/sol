@@ -1,21 +1,33 @@
+// The bar, in the grammar of the macOS menu bar — because the mapping is
+// exact. There, the frontmost application owns the left of the bar: its name
+// in bold, then its menus. Here, the planet you are standing on is the
+// frontmost application, so it gets the same place and the same weight.
+//
+//   ☉          where  would be: the menu of everything sol can do
+//   Earth      the "app": where you are, in bold, in its own colour
+//   home · 10  its "menus": the role it plays and what it is holding
+//   ①②❸④┊⑤⑥⑦⑧  the strip — all eight planets, and who is holding what
+//   status     monochrome, quiet, evenly spaced
+//   ▦          Control Centre: opens the overview (mod+e)
+//   clock      last, as it is on every Mac
+//
+// Only `custom/where` talks to driftwm. It leaves the other two modules'
+// JSON in $XDG_RUNTIME_DIR/sol-bar, so they cost a seek and a print.
 {
   "layer": "top",
   "position": "top",
-  "height": 34,
-  "margin-top": 8,
-  "margin-left": 12,
-  "margin-right": 12,
-  "modules-left": ["clock", "custom/system", "custom/where"],
-  "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray"],
-  "clock": {
-    "format": "  {:%H:%M   %a %d %b}",
-    "tooltip": false
-  },
-  "custom/system": {
+  "height": 28,
+  "modules-left": ["custom/sol", "custom/where", "custom/holding"],
+  "modules-center": ["custom/strip"],
+  "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray", "custom/overview", "clock"],
+
+  "custom/sol": {
     "format": "☉",
-    "on-click": "sol system",
+    "on-click": "sol menu",
     "tooltip": false
   },
+
+  // The only module that asks driftwm anything, once a second.
   "custom/where": {
     "exec": "sol here --waybar",
     "return-type": "json",
@@ -23,30 +35,68 @@
     "on-click": "sol system",
     "on-click-right": "sol menu"
   },
+  "custom/holding": {
+    "exec": "sol bar holding",
+    "return-type": "json",
+    "interval": 1,
+    "on-click": "sol arrange",
+    "on-click-right": "sol-map"
+  },
+
+  // Scroll it to travel sunward and outward, the way you scroll a volume icon.
+  "custom/strip": {
+    "exec": "sol bar strip",
+    "return-type": "json",
+    "interval": 1,
+    "on-click": "sol-map",
+    "on-click-right": "sol menu",
+    "on-scroll-up": "sol hop in",
+    "on-scroll-down": "sol hop out"
+  },
+
+  "custom/overview": {
+    "format": "▦",
+    "on-click": "sol-map",
+    "tooltip": false
+  },
+
+  // Percentages, because a bare number in a menu bar is just noise.
   "cpu": {
-    "format": "  {usage}%",
+    "format": "{usage}%",
     "interval": 3,
     "tooltip": false
   },
   "memory": {
-    "format": "  {percentage}%",
+    "format": "{percentage}%",
     "interval": 5,
     "tooltip": false
   },
+  // Glyphs are named literally rather than through format-icons, and only
+  // ones this Nerd Font actually carries — a missing icon is worse than none.
   "pulseaudio": {
-    "format": "  {volume}%",
-    "format-muted": "  mute",
+    "format": "  {volume}%",
+    "format-muted": "  mute",
     "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "on-scroll-up": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%+",
+    "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 2%-",
     "tooltip": false
   },
+  // Connected says it in one glyph; losing the route is the only thing
+  // here worth a word, so that is the only case that gets one.
   "network": {
-    "format-wifi": "  {essid}",
-    "format-ethernet": "󰈀  {ifname}",
-    "format-disconnected": "󰖪  offline",
+    "format-wifi": "",
+    "format-ethernet": "",
+    "format-disconnected": "offline",
     "interval": 10,
-    "tooltip": false
+    "tooltip-format-wifi": "{essid} · {signalStrength}%",
+    "tooltip-format-ethernet": "{ifname} · {ipaddr}",
+    "tooltip-format-disconnected": "no route"
   },
   "tray": {
-    "spacing": 12
+    "spacing": 10
+  },
+  "clock": {
+    "format": "{:%a %d %b  %H:%M}",
+    "tooltip-format": "<tt>{calendar}</tt>"
   }
 }

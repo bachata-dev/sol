@@ -1,39 +1,45 @@
+/* The bar is flush to the top edge, full width, and translucent — a menu bar
+   rather than a floating widget. Labels are set in a UI face and numerals in
+   the monospace one, so the readouts hold their width instead of twitching
+   every time a digit changes. Colour is spent in one place: the planet. */
+
 * {
-  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
-  font-size: 13px;
+  font-family: "Inter", "SF Pro Text", "Noto Sans", "DejaVu Sans", sans-serif;
+  font-size: 12.5px;
   min-height: 0;
 }
 
 window#waybar {
-  background: rgba(22, 22, 30, 0.72);
+  background: rgba(22, 22, 30, 0.62);
   color: #c0caf5;
-  border-radius: 12px;
-  border: 1px solid rgba(122, 162, 247, 0.25);
+  border-bottom: 1px solid rgba(65, 72, 104, 0.45);
 }
 
-#clock,
-#custom-canvas,
-#cpu,
-#memory,
-#pulseaudio,
-#network,
-#tray {
-  padding: 0 14px;
-}
+/* ── left: the menu, the place, and what it holds ────────────────────── */
 
-#clock {
-  color: #7aa2f7;
-  font-weight: 600;
-}
-#custom-system {
+/* Where  would be. ☉ is the one glyph in the bar that no text font carries,
+   so fontconfig hands it to Noto Sans Symbols2 — whose ascent is far taller
+   than Noto Sans's. Each module is centred in its own box rather than on a
+   shared baseline, so that taller box floats the sun above the line the
+   words sit on. The padding is what puts it back down on that line. */
+#custom-sol {
   color: #f0d99a;
-  font-size: 15px;
-  padding: 0 10px;
+  font-family: "Noto Sans Symbols2", "Noto Sans Symbols", sans-serif;
+  font-size: 13px;
+  padding: 5px 10px 0 14px;
 }
 
+/* Where the frontmost application's name would be — so, in bold. */
 #custom-where {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 0 8px 0 0;
+}
+
+/* And where its menus would be. */
+#custom-holding {
   color: #565f89;
-  font-weight: 600;
+  padding: 0 8px 0 0;
 }
 
 #custom-where.sun     { color: #f0d99a; }
@@ -45,5 +51,78 @@ window#waybar {
 #custom-where.saturn  { color: #e6cfa1; }
 #custom-where.uranus  { color: #7dcfff; }
 #custom-where.neptune { color: #5a7fd0; }
-#custom-where.space   { color: #565f89; font-weight: 400; }
 #custom-where.system  { color: #bb9af7; }
+#custom-where.space   { color: #565f89; font-weight: 500; }
+
+/* ── centre: the strip ───────────────────────────────────────────────── */
+/* It brings its own colours in pango markup, so all this owes it is room. */
+#custom-strip {
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 13px;
+  padding: 0 12px;
+}
+
+/* ── right: status, quiet and evenly spaced ──────────────────────────── */
+#cpu,
+#memory,
+#pulseaudio,
+#network,
+#tray,
+#custom-overview {
+  color: #737aa2;
+  padding: 0 7px;
+}
+
+#cpu,
+#memory {
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 11.5px;
+}
+
+#pulseaudio,
+#network {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 13px;
+}
+
+/* Control Centre, and the only thing on the right that opens a window. */
+#custom-overview {
+  font-size: 13px;
+  padding: 0 10px;
+}
+
+/* The clock sits last, as it does on every Mac, and in the plain foreground —
+   it is the one thing you read without being told to. */
+#clock {
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: #a9b1d6;
+  padding: 0 14px 0 8px;
+}
+
+/* Menu-bar items light up under the pointer. */
+#custom-sol:hover,
+#custom-where:hover,
+#custom-holding:hover,
+#custom-strip:hover,
+#custom-overview:hover,
+#pulseaudio:hover,
+#network:hover,
+#clock:hover {
+  background: rgba(192, 202, 245, 0.08);
+}
+
+tooltip {
+  background: rgba(22, 22, 30, 0.96);
+  border: 1px solid rgba(65, 72, 104, 0.6);
+  border-radius: 8px;
+}
+tooltip label {
+  color: #c0caf5;
+  padding: 2px;
+}
+
+/* Losing the route is the one status change worth raising your voice for. */
+#network.disconnected {
+  color: #f7768e;
+}

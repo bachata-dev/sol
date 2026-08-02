@@ -61,8 +61,8 @@ Press **`mod+/`** at any time for this card on screen.
 | `mod+0` | fly to the Sun | **A crowded planet** | |
 | `mod+left` / `mod+right` | sunward / outward | `mod+a` | tidy this planet into a grid |
 | `mod+u` | whole system view | `mod+n` / `mod+p` | step through its windows |
-| `mod+tab` | fly-to menu | **Do** | |
-| click the map | fly there | `mod+return` `mod+space` | terminal · launcher |
+| `mod+e` | the overview | **Do** | |
+| `mod+tab` | fly-to menu | `mod+return` `mod+space` | terminal · launcher |
 | | | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
 
 Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
@@ -87,7 +87,7 @@ of the last. Now a planet holds a **district**, and sol knows what is in it:
   everything Earth is holding. Press `mod+3` again from that overview and you drop into your window
   to get to work; press it again and you are back to the overview.
 - **`mod+n` / `mod+p` step through** them one at a time, flying to each.
-- **The map and the bar count them**, so a busy planet reads as busy from across the system.
+- **The bar and the overview count them**, so a busy planet reads as busy from across the system.
 
 A window belongs where you put it. `mod+ctrl+3` and `mod+a` write that down, which matters because a
 tidy district is wider than the gap between planets — without it the far corner of Earth's grid
@@ -112,13 +112,34 @@ from far away.
 
 ![the whole system](screenshots/system.png)
 
-**The map** (bottom right) is live: the orbits, your windows, and a box showing exactly what you're
-looking at, with a tally of what each planet is holding along the bottom. Click anywhere on it to
-fly there — click a planet and you land framed on it.
+**The overview** (`mod+e`) is the whole system at a size that can actually answer something: every
+orbit drawn as a fine dotted ellipse, every district as a card, every window as a mark inside it,
+and a pane naming what the planet you picked is holding. `1`…`8` fly, `↑``↓` pick a window, `⏎`
+drops you into it, `a` tidies the planet, and clicking anywhere flies there. Press `mod+e` again, or
+`esc`, and it is gone.
 
-**The bar** always names where you are — "3 Earth", "6 Saturn", "the system", "deep space" — tinted
-that planet's colour and followed by its window count, so you can read your location without looking
-for it.
+It replaced a small live map that sat in the bottom-right corner of every screen. That map was forty
+cells by twenty for the entire solar system — four hundred canvas units to the cell, which put
+neighbouring orbits two cells apart, squashed a whole district into two rows, and left nowhere to
+say what any window was. It drew the shape of a system you already knew by heart and none of what
+you would open a map for, and it did it on top of your windows, all day. **Asking for it is what
+makes it worth having**: nothing is parked, so it can take the room it needs to be legible.
+
+![the overview](screenshots/overview.png)
+
+**The bar** borrows the grammar of the macOS menu bar, because the mapping turns out to be exact:
+the planet you are standing on is the frontmost application. So `☉` opens sol's menu where the Apple
+menu would be, the place is named in **bold** where the app name goes — "Earth", "Saturn", "the
+system", "deep space", in that planet's colour — and what it holds ("home · 10") reads as that app's
+menus. Status sits on the right, monochrome and quiet, then Control Centre, then the clock last.
+
+In the middle is **the strip**: all eight planets at once, `①②③④ ┊ ⑤⑥⑦⑧`, each in its own colour with
+a small tally, dim when empty, underlined where you are. It is ordinal rather than spatial on
+purpose — nobody flies by angle, they fly by number — and the belt keeps its place in the middle as
+the divide it is. Scroll it to travel sunward and outward, the way you scroll a volume icon.
+
+Only one module in the bar ever asks driftwm anything. `sol here` runs once a second, and leaves the
+other modules' answers in a file for them to read, so eight planets' worth of tally costs one query.
 
 **Name plates** float beside each planet, naming it and counting what it holds — "3  E A R T H
 home · 10". They're ordinary windows on purpose: driftwm limits how far you can zoom out to half the
@@ -168,8 +189,9 @@ sol send 8        # send the focused window to Neptune; `--stay` to not follow
 sol list          # what is where
 sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
-sol menu          # fuzzel fly-to menu
-sol map           # the live map (runs inside a terminal)
+sol menu          # the ☉ menu: everywhere to go, and what to do
+sol map           # the overview (runs inside a terminal; sol-map toggles it)
+sol bar strip     # one line of the bar — where, holding, or strip
 sol help          # the keybinding card
 ```
 

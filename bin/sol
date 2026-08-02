@@ -25,7 +25,8 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol list                     what is where
   sol here [--waybar]          where am I?
   sol menu                     fuzzel warp menu
-  sol map                      live system map (runs inside a terminal)
+  sol map                      the overview (runs inside a terminal)
+  sol bar <where|holding|strip>  one line of the bar
   sol help [--hold]            keybinding card
 """
 
@@ -675,27 +676,109 @@ def cmd_plate(args):
     print(plate_line(p, census(Drift().state()).get(p.n, 0)))
 
 
+# ── The bar ───────────────────────────────────────────────────────────────
+# The bar borrows the shape of the macOS menu bar, because the mapping is
+# exact: the planet you are on is the frontmost application. So ☉ opens the
+# menu where  would be, the place is named in bold where the app name goes,
+# what it holds reads as that app's menus, and the status glyphs and the
+# clock sit on the right in that order.
+#
+# Three of those modules want the same census, and none of them should pay
+# for it. `sol here` is the one that asks — it already runs once a second for
+# the plates — and it leaves the finished JSON in one file for the others to
+# read. `sol bar strip` is then a seek and a print: no IPC, no state, no cost.
+BAR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-bar")
+BAR_PARTS = ("where", "holding", "strip")
+
+RING = "①②③④⑤⑥⑦⑧"          # a planet, as the key that flies you to it
+SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"          # its tally, small enough to read as a badge
+DIMC = "#3b4261"            # an empty planet: present, but not asking for you
+
+
+def strip_markup(counts, here):
+    """The eight planets as one line: where you are, and who is holding what.
+
+    Ordinal rather than spatial, because that is how the system is actually
+    used — nobody flies by angle, they fly by number. All eight keep the same
+    ring so every digit stays readable; the one you are standing on is
+    underlined, the way a Mac marks the selected segment of anything. The
+    belt keeps its place in the middle, as the divide it is.
+    """
+    out = []
+    for p in PLANETS:
+        n = counts.get(p.n, 0)
+        badge = "".join(SUP[int(c)] for c in str(n)) if n else ""
+        colour = p.colour if (n or p is here) else DIMC
+        mark = ' underline="single" underline_color="%s"' % p.colour if p is here else ""
+        out.append('<span foreground="%s"%s>%s%s</span>'
+                   % (colour, mark, RING[p.n - 1], badge))
+        if p.n == 4:
+            out.append('<span foreground="#2a2f45">┊</span>')
+    return "  ".join(out)
+
+
+def write_bar(st, place, on_it, n, z):
+    counts = census(st)
+    here = place if (place and on_it and place is not SUN) else None
+    if place is None:
+        name, cls, role = "the system", "system", "all eight planets"
+    elif not on_it:
+        name, cls, role = "deep space", "space", "between worlds"
+    else:
+        name, cls, role = place.name, place.name.lower(), place.role
+
+    holding = role if not n else "%s · %d" % (role, n)
+    tally = "  ".join("%d %s · %d" % (p.n, p.name, counts[p.n])
+                      for p in PLANETS if counts.get(p.n)) or "nothing on the canvas"
+    text = "\n".join(json.dumps(o) for o in (
+        {"text": name, "class": cls, "tooltip": "%s — %d%%" % (role, int(z * 100))},
+        {"text": holding, "class": cls, "tooltip": windows_word(n) if n else role},
+        {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
+    )) + "\n"
+    try:
+        with open(BAR) as f:
+            if f.read() == text:
+                return text
+    except OSError:
+        pass
+    try:
+        with open(BAR, "w") as f:
+            f.write(text)
+    except OSError:
+        pass
+    return text
+
+
+def cmd_bar(args):
+    """One line of the bar, straight from the file `sol here` leaves."""
+    part = args[0] if args else "where"
+    if part not in BAR_PARTS:
+        sys.exit("sol bar: %s (want one of: %s)" % (part, ", ".join(BAR_PARTS)))
+    try:
+        with open(BAR) as f:
+            print(f.read().split("\n")[BAR_PARTS.index(part)])
+    except (OSError, IndexError):
+        print(json.dumps({"text": "", "class": "space"}))
+
+
 def cmd_here(args):
     d = Drift()
     st = d.state()
     z = d.zoom()
     place, on_it, n = whereabouts(st, d.camera(), z)
     write_plates(st)          # the heartbeat that keeps the name plates current
+    bar = write_bar(st, place, on_it, n, z)
 
     if place is None:
-        name, cls, role, label = "the system", "system", "all eight planets", "the system"
+        role, label = "all eight planets", "the system"
     elif not on_it:
-        name, cls, role, label = "deep space", "space", "between worlds", "deep space"
+        role, label = "between worlds", "deep space"
     else:
-        name, cls, role = place.name, place.name.lower(), place.role
-        label = name if place is SUN else "%d %s" % (place.n, name)
+        role = place.role
+        label = place.name if place is SUN else "%d %s" % (place.n, place.name)
 
     if "--waybar" in args:
-        text = "☉ %s · %d%%" % (label, int(z * 100))
-        if n:
-            text += " · %d" % n
-        tip = role if not n else "%s — %s" % (role, windows_word(n))
-        print(json.dumps({"text": text, "class": cls, "tooltip": tip}))
+        print(bar.split("\n")[0])
     else:
         print("%s  (%s)%s" % (label, role, "  ·  " + windows_word(n) if n else ""))
 
@@ -721,24 +804,45 @@ def cmd_list(args):
 
 
 def cmd_menu(args):
-    items = ["Sun — home base"] + ["%d %s — %s" % (p.n, p.name, p.role) for p in PLANETS] \
-            + ["System view"]
+    """The ☉ menu — everywhere you can go, and the few things you can do.
+
+    This is what the ☉ at the left of the bar opens, so it carries the same
+    weight as the  menu it sits where: the places first, with what each is
+    holding, then the handful of actions that are about the canvas itself.
+    """
+    d = Drift()
+    st = d.state()
+    counts = census(st)
+    items = ["☉  Sun — home base"]
+    for p in PLANETS:
+        n = counts.get(p.n, 0)
+        items.append("%d  %s — %s%s" % (p.n, p.name, p.role,
+                                        "  ·  %d" % n if n else ""))
+    items += ["─  Overview", "─  Whole system", "─  Tidy this planet",
+              "─  Keybindings"]
     import subprocess
     try:
-        out = subprocess.run(["fuzzel", "--dmenu", "--prompt", "fly to ▸ ",
-                              "--lines", "10"],
+        out = subprocess.run(["fuzzel", "--dmenu", "--prompt", "sol ▸ ",
+                              "--lines", "13"],
                              input="\n".join(items), text=True,
                              capture_output=True).stdout.strip()
     except FileNotFoundError:
         sys.exit("sol menu: fuzzel not installed")
     if not out:
         return
-    if out.startswith("System"):
-        cmd_system([])
-    elif out.startswith("Sun"):
+    tail = out.split(None, 1)[-1].strip()
+    if out.startswith("☉"):
         cmd_goto(["sun"])
-    else:
+    elif not out.startswith("─"):
         cmd_goto([out.split()[0]])
+    elif tail == "Overview":
+        subprocess.Popen(["sol-map"], start_new_session=True)
+    elif tail == "Whole system":
+        cmd_system([])
+    elif tail == "Tidy this planet":
+        cmd_arrange([])
+    elif tail == "Keybindings":
+        subprocess.Popen(["sol-help"], start_new_session=True)
 
 
 HELP = """
@@ -754,7 +858,7 @@ HELP = """
    mod+left/right  sunward / outward   mod+q        close window
    mod+u           whole system view   mod+f        fullscreen
    mod+tab         fly-to menu         mod+m        maximise
-   click the map   fly there           mod+/        this card
+   mod+e           the overview        mod+/        this card
 
    CARRY                               A CROWDED PLANET
    mod+ctrl+1 … 8  send window         mod+a        tidy into a grid
@@ -764,8 +868,9 @@ HELP = """
    A planet with more windows than fit the screen is framed whole when
    you fly to it; press the same key again to drop into your window.
 
-   The map (bottom right) is live: your windows, the planets, the box
-   showing where you are looking, and what each planet is holding.
+   mod+e opens the overview: the whole system at a size that resolves,
+   every window named, 1…8 to fly and ⏎ to drop into the one you picked.
+   The strip in the bar counts what each planet is holding meanwhile.
 
    1 Mercury quick   3 Earth home    5 Jupiter builds  7 Uranus spare
    2 Venus   comms   4 Mars   ops    6 Saturn  media   8 Neptune archive
@@ -782,30 +887,30 @@ def cmd_help(args):
             pass
 
 
-# ── Live map ──────────────────────────────────────────────────────────────
+# ── The overview ──────────────────────────────────────────────────────────
+# What this replaces was a 40x20 square parked in the corner of every screen.
+# At that size the whole system comes to 401 canvas units a cell: neighbouring
+# orbits land two cells apart, a district is two rows tall, and there is
+# nowhere to say what any window actually is — so it drew the shape of a
+# system you already knew by heart and none of what you would open a map for.
+#
+# It is full screen now, and asked for rather than parked. That buys the
+# resolution to draw a district as a rectangle instead of a smear, room to
+# name every window in it, and the corner of your screen back.
 C_DIM, C_FG, C_CAM = "\033[38;2;65;72;104m", "\033[38;2;192;202;245m", "\033[38;2;125;207;255m"
 C_SUN, C_RST = "\033[38;2;224;175;104m", "\033[0m"
+C_ORB = "\033[38;2;48;56;84m"       # the orbit hairlines, kept to a whisper
+C_KEY = "\033[38;2;86;95;137m"      # the key hints along the bottom
 PCOL = {1: "\033[38;2;154;165;206m", 2: "\033[38;2;224;175;104m",
         3: "\033[38;2;122;162;247m", 4: "\033[38;2;247;118;142m",
         5: "\033[38;2;255;158;100m", 6: "\033[38;2;230;207;161m",
         7: "\033[38;2;125;207;255m", 8: "\033[38;2;90;127;208m"}
+PCOL[0] = C_SUN
 
-# Terminal cells are about twice as tall as they are wide, so the column /
-# row ratio is held at 2:1 — otherwise every orbit renders as a flat ellipse.
-MW, MH = 40, 20
-SPAN = SYSTEM_R * 1.18
-
-
-def to_cell(x, y):
-    c = int((x + SPAN) / (2 * SPAN) * MW)
-    r = int((SPAN - y) / (2 * SPAN) * MH)
-    return (r, c) if 0 <= r < MH and 0 <= c < MW else (None, None)
-
-
-def to_world(col, row):
-    x = (col + 0.5) / MW * 2 * SPAN - SPAN
-    y = SPAN - (row + 0.5) / MH * 2 * SPAN
-    return x, y
+OV_SPAN = SYSTEM_R * 1.10
+PANE = 34                           # side pane: what the selected planet holds
+TOP = 3                             # the map starts on this terminal row
+LEFT = 2                            # ... and in this column
 
 
 def orbit_points(p, n=200):
@@ -820,87 +925,271 @@ def orbit_points(p, n=200):
         yield cx + u * cw - v * sw, cy + u * sw + v * cw
 
 
-def draw_map(d):
+DOTS = ((0x01, 0x08), (0x02, 0x10), (0x04, 0x20), (0x40, 0x80))
+
+
+class Sheet:
+    """A character grid with a braille layer underneath it.
+
+    Terminal cells are about twice as tall as they are wide, so an orbit
+    plotted a whole cell at a time comes out as a flat ellipse in visible
+    stair-steps. The dim layer — the orbits and the belt, which are all one
+    colour anyway — is plotted into braille instead: eight dots to the cell,
+    two across and four down, which lands them on a square sub-pixel and
+    draws the ellipses as fine dotted lines rather than a staircase of
+    blocks. Everything that carries a colour of its own is drawn over the
+    top, a whole cell at a time.
+    """
+
+    def __init__(self, w, h, span):
+        self.w, self.h, self.span = w, h, span
+        self.cell = [[None] * w for _ in range(h)]
+        self.sub = [[0] * w for _ in range(h)]
+
+    def col(self, x):
+        return int((x + self.span) / (2 * self.span) * self.w)
+
+    def row(self, y):
+        return int((self.span - y) / (2 * self.span) * self.h)
+
+    def world(self, c, r):
+        x = (c + 0.5) / self.w * 2 * self.span - self.span
+        y = self.span - (r + 0.5) / self.h * 2 * self.span
+        return x, y
+
+    def dot(self, x, y):
+        sx = int((x + self.span) / (2 * self.span) * self.w * 2)
+        sy = int((self.span - y) / (2 * self.span) * self.h * 4)
+        c, r = sx // 2, sy // 4
+        if 0 <= r < self.h and 0 <= c < self.w:
+            self.sub[r][c] |= DOTS[sy % 4][sx % 2]
+
+    def free(self, r, c, n):
+        """Is there room for n characters at this row and column?"""
+        if not (0 <= r < self.h and 0 <= c and c + n <= self.w):
+            return False
+        return all(self.cell[r][c + i] is None for i in range(n))
+
+    def put(self, x, y, ch, colour):
+        c, r = self.col(x), self.row(y)
+        if 0 <= r < self.h and 0 <= c < self.w:
+            self.cell[r][c] = (ch, colour)
+        return r, c
+
+    def text(self, r, c, s, colour):
+        for i, ch in enumerate(s):
+            if 0 <= r < self.h and 0 <= c + i < self.w:
+                self.cell[r][c + i] = (ch, colour)
+
+    def label(self, r, c, s, colour):
+        """A planet's name, in the first place beside it that is free.
+
+        Every planet gets named or the overview has not done its job, so this
+        works outwards — right of the marker, then left, then the rows below
+        and above — and if the whole neighbourhood is taken it writes anyway.
+        A name over a district's border edge still reads; a planet with no
+        name at all is the one outcome worth avoiding.
+        """
+        spots = []
+        for dr in (0, 1, -1, 2, -2):
+            spots += [(r + dr, c + 2), (r + dr, c - len(s) - 1)]
+        for rr, cc in spots:
+            if self.free(rr, cc, len(s)):
+                self.text(rr, cc, s, colour)
+                return
+        self.text(r, c + 2 if c < self.w // 2 else c - len(s) - 1, s, colour)
+
+    def box(self, x, y, hw, hh, colour):
+        """A district's card, as a rounded rectangle."""
+        c0, c1 = self.col(x - hw), self.col(x + hw)
+        r0, r1 = self.row(y + hh), self.row(y - hh)
+        if c1 - c0 < 2 or r1 - r0 < 1:
+            return
+        for c in range(c0 + 1, c1):
+            for r in (r0, r1):
+                if 0 <= r < self.h and 0 <= c < self.w:
+                    self.cell[r][c] = ("─", colour)
+        for r in range(r0 + 1, r1):
+            for c in (c0, c1):
+                if 0 <= r < self.h and 0 <= c < self.w:
+                    self.cell[r][c] = ("│", colour)
+        for r, c, ch in ((r0, c0, "╭"), (r0, c1, "╮"), (r1, c0, "╰"), (r1, c1, "╯")):
+            if 0 <= r < self.h and 0 <= c < self.w:
+                self.cell[r][c] = (ch, colour)
+
+    def lines(self):
+        out = []
+        for r in range(self.h):
+            row = []
+            for c in range(self.w):
+                got = self.cell[r][c]
+                if got:
+                    row.append(got[1] + got[0] + C_RST)
+                elif self.sub[r][c]:
+                    row.append(C_ORB + chr(0x2800 + self.sub[r][c]) + C_RST)
+                else:
+                    row.append(" ")
+            out.append("".join(row))
+        return out
+
+
+def win_name(w):
+    """A window, as (what it is, what it is showing).
+
+    The app id is what you sent here and what the rules address; the title is
+    whatever it happens to be doing. Both, when they differ — a switcher that
+    lists ten identical app ids has told you nothing.
+    """
+    app = str(w.get("app_id") or "").strip()
+    title = (w.get("title") or "").strip()
+    if not app:
+        return title or "window", ""
+    return app, "" if title.lower() in ("", app.lower()) else title
+
+
+def cell_aspect():
+    """How much taller than wide a terminal cell is, asked rather than assumed.
+
+    A cell is roughly 2:1, and "roughly" is what turns a circle into an egg.
+    foot reports the window's pixel size alongside its cell counts, so the
+    true ratio is there for the asking and the orbits come out round under
+    any font. Anything that will not say falls back to the usual 2.2.
+    """
+    try:
+        import fcntl
+        import struct
+        import termios
+        rows, cols, xp, yp = struct.unpack(
+            "HHHH", fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, b"\0" * 8))
+        if rows and cols and xp and yp:
+            return max(1.2, min(3.5, (yp / rows) / (xp / cols)))
+    except Exception:
+        pass
+    return 2.2
+
+
+def draw_overview(d, sel, size):
+    """Paint the whole system, and what the selected planet is holding."""
     st = d.state()
+    cols, rows = size
     cx, cy = st.get("camera", [0, 0])
     z = st.get("zoom", 1.0) or 1.0
     ow, oh = screen(st)
-
-    grid_ = [[(" ", C_DIM) for _ in range(MW)] for _ in range(MH)]
-
-    # orbit ellipses, sampled
-    for p in PLANETS:
-        for x, y in orbit_points(p):
-            r_, c_ = to_cell(x, y)
-            if r_ is not None and grid_[r_][c_][0] == " ":
-                grid_[r_][c_] = ("·", C_DIM)
-    # asteroid belt
-    for k in range(120):
-        a = 2 * math.pi * k / 120
-        r_, c_ = to_cell(BELT_R * math.cos(a), BELT_R * math.sin(a))
-        if r_ is not None and grid_[r_][c_][0] in (" ", "·"):
-            grid_[r_][c_] = ("˙", C_DIM)
-
-    # viewport box, clamped to the map so a wide view still reads as a frame
-    hw, hh = ow / (2 * z), oh / (2 * z)
-    r1, c1 = to_cell(max(cx - hw, -SPAN), min(cy + hh, SPAN))
-    r2, c2 = to_cell(min(cx + hw, SPAN), max(cy - hh, -SPAN))
-    if None not in (r1, c1, r2, c2):
-        for c in range(min(c1, c2), max(c1, c2) + 1):
-            for r in (r1, r2):
-                grid_[r][c] = ("─", C_CAM)
-        for r in range(min(r1, r2), max(r1, r2) + 1):
-            for c in (c1, c2):
-                grid_[r][c] = ("│", C_CAM)
-
-    # windows
-    for w in real_windows(st):
-        r_, c_ = to_cell(*w["position"])
-        if r_ is not None:
-            grid_[r_][c_] = ("▪", C_FG)
-
-    # sun + planets, bright when they are holding something
     counts = census(st)
-    r_, c_ = to_cell(0, 0)
-    if r_ is not None:
-        grid_[r_][c_] = ("☉", C_SUN)
-    for p in PLANETS:
-        r_, c_ = to_cell(p.x, p.y)
-        if r_ is not None:
-            grid_[r_][c_] = (str(p.n),
-                             ("\033[1m" if counts.get(p.n) else "") + PCOL[p.n])
 
-    place, on_it, n = whereabouts(st, (cx, cy), z)
-    if place is None:
-        where = "the system"
-    elif not on_it:
-        where = "deep space"
-    else:
-        where = ("Sun · home base" if place is SUN
-                 else "%d %s · %s" % (place.n, place.name, place.role))
-    if n:
-        where += " · %d" % n
-    head = (" ☉ " + where).ljust(MW + 1) + "%d%%" % int(z * 100)
+    mh = max(8, rows - TOP - 3)
+    mw = max(20, min(cols - PANE - LEFT - 3, int(mh * cell_aspect())))
+    sh = Sheet(mw, mh, OV_SPAN)
 
-    # Cells are repainted in place, so every line clears its own tail — without
-    # it, a shorter line leaves the previous one's characters behind.
-    buf = ["\033[H", C_FG + head + C_RST + "\033[K", "\n\033[K"]
-    for row in grid_:
-        buf.append(" ")
-        for ch, col in row:
-            buf.append(col + ch + C_RST)
+    for p in PLANETS:                                   # orbits, then the belt
+        for x, y in orbit_points(p, 8 * mw):
+            sh.dot(x, y)
+    for k in range(2 * mw):
+        a = 2 * math.pi * k / (2 * mw)
+        sh.dot(BELT_R * math.cos(a), BELT_R * math.sin(a))
+
+    # The viewport, so the overview always says where you are looking.
+    hw, hh = ow / (2 * z), oh / (2 * z)
+    sh.box(cx, cy, min(hw, sh.span), min(hh, sh.span), C_CAM)
+
+    here, on_it, _ = whereabouts(st, (cx, cy), z)
+    marks = []
+    for p in PLACES:
+        wins = district(st, p)
+        if wins:                                        # the card, then its windows
+            b = bounds(st, p)
+            if b:
+                sh.box(b[0], b[1], b[2], b[3], C_DIM)
+            for w in wins:
+                sh.put(w["position"][0], w["position"][1], "▪", PCOL[p.n])
+        lit = PCOL[p.n] + ("\033[1m" if counts.get(p.n) else "")
+        r, c = sh.put(p.x, p.y, "☉" if p is SUN else str(p.n), lit)
+        marks.append((p, r, c, lit))
+
+    # The names go on last, so each can see where the others landed. The Sun
+    # keeps only its glyph: it is the one body nobody has to be told.
+    for p, r, c, lit in marks:
+        if p is SUN:
+            continue
+        tag = "%s·%d" % (p.name, counts[p.n]) if counts.get(p.n) else p.name
+        sh.label(r, c, ("▸" + tag) if p is sel[0] else tag, lit)
+
+    body = sh.lines()
+
+    # ── the side pane: what the selected planet is holding ──
+    p = sel[0]
+    wins = district(st, p)
+    head = p.name if p is SUN else "%d %s" % (p.n, p.name)
+    pane = [PCOL[p.n] + "\033[1m" + head.upper() + C_RST,
+            C_DIM + "%s · %s" % (p.role, windows_word(len(wins)) if wins
+                                 else "empty") + C_RST, ""]
+    for i, w in enumerate(wins[:mh - 4]):
+        app, title = win_name(w)
+        app = app[:14]
+        row = "%-15s%s" % (app, title[:PANE - 18])
+        if i == sel[1]:
+            pane.append(PCOL[p.n] + "▸ " + row + C_RST)
+        else:
+            pane.append(C_FG + "  " + app.ljust(15) + C_RST
+                        + C_DIM + title[:PANE - 18] + C_RST)
+    if len(wins) > mh - 4:
+        pane.append(C_DIM + "  … and %d more" % (len(wins) - (mh - 4)) + C_RST)
+
+    where = ("the system" if here is None else "deep space" if not on_it
+             else here.name if here is SUN else "%d %s" % (here.n, here.name))
+    head = " ☉  S O L" + "   " + C_DIM + where + " · " + \
+        windows_word(len(real_windows(st))) + " · %d%%" % int(z * 100) + C_RST
+    keys = ("1…8 fly  ·  ↑↓ pick  ·  ⏎ dive in  ·  a tidy  ·  "
+            "u system  ·  click anywhere  ·  esc")
+
+    buf = ["\033[H", C_FG + head + C_RST + "\033[K\n\033[K\n"]
+    for i in range(mh):
+        buf.append(" " * LEFT + body[i])
+        if i < len(pane):
+            buf.append("  " + pane[i])
         buf.append("\033[K\n")
-    tally = "  ".join("%d·%d" % (p.n, counts[p.n]) for p in PLANETS if counts.get(p.n))
-    buf.append("\033[K\n " + C_DIM + (tally or "click to fly · mod+1…8 · mod+u system")
-               + C_RST + "\033[K")
+    buf.append("\033[K\n" + " " * LEFT + C_KEY + keys + C_RST + "\033[K")
     sys.stdout.write("".join(buf))
     sys.stdout.flush()
+    return sh, st
+
+
+def next_key(buf):
+    """Pull one keystroke off the front of the buffer.
+
+    Returns (key, rest), or (None, buf) when the buffer holds the start of an
+    escape sequence whose tail has not arrived yet. Keys have to be parsed out
+    of a buffer rather than read one byte at a time because an arrow key is
+    three bytes that arrive together: read them through a buffered stream and
+    select() — which watches the file descriptor, not Python's buffer — will
+    say there is nothing more to come, and the tail of the sequence is thrown
+    away. So the reading is raw, and the framing happens here.
+    """
+    if not buf.startswith("\033"):
+        return buf[0], buf[1:]
+    if len(buf) == 1:
+        return None, buf                       # ESC alone, or the start of more
+    if buf[1] != "[":
+        return buf[:2], buf[2:]
+    if buf.startswith("\033[<"):               # an SGR mouse report
+        for i in range(3, len(buf)):
+            if buf[i] in "Mm":
+                return buf[:i + 1], buf[i + 1:]
+        return (None, buf) if len(buf) < 32 else ("", "")
+    for i in range(2, len(buf)):               # any other CSI: ends on a final
+        if "@" <= buf[i] <= "~":
+            return buf[:i + 1], buf[i + 1:]
+    return None, buf
 
 
 def cmd_map(args):
+    """The overview — the whole system, named, on demand.
+
+    Opened and closed with mod+e (or the ▦ in the bar). Because it is a
+    window like any other, closing it costs nothing to remember: the process
+    ends and the screen is yours again.
+    """
     d = Drift()
-    sys.stdout.write("\033[?25l\033[2J\033[?1006h\033[?1000h")
-    sys.stdout.flush()
     import select
     import termios
     import tty
@@ -910,49 +1199,136 @@ def cmd_map(args):
         tty.setcbreak(fd)
     except Exception:
         old = None
-    pending = ""
-    last = 0.0
+    sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[?1006h\033[?1000h")
+
+    st0 = d.state()
+    at, _, _ = whereabouts(st0, d.camera(), d.zoom())
+    sel = [at if at else SUN, 0]
+    sh, st = None, st0
+    buf, last = "", 0.0
     try:
         while True:
             if time.time() - last > 0.5:
-                draw_map(d)
+                try:
+                    size = os.get_terminal_size()
+                    size = (size.columns, size.lines)
+                except OSError:
+                    size = (120, 40)
+                sh, st = draw_overview(d, sel, size)
                 last = time.time()
-            r, _, _ = select.select([sys.stdin], [], [], 0.15)
-            if r:
-                pending += sys.stdin.read(1)
-                if pending.endswith("M") and pending.startswith("\033[<"):
-                    try:
-                        body = pending[3:-1]
-                        btn, col, row = (int(v) for v in body.split(";"))
-                        if btn == 0:
-                            wx, wy = to_world(col - 2, row - 2)
-                            # Clicking the cell a planet is drawn in means that
-                            # planet, so the map flies you somewhere meaningful.
-                            st = d.state()
-                            p = next((p for p in PLACES
-                                      if to_cell(p.x, p.y) == to_cell(wx, wy)), None)
-                            if p:
-                                fly(d, *frame(st, p, screen(st)))
-                            else:
-                                fly(d, wx, wy, d.zoom() if d.zoom() < 0.5 else 1.0)
-                            last = 0
-                    except ValueError:
-                        pass
-                    pending = ""
-                elif len(pending) > 24 or pending.endswith("m"):
-                    pending = ""
+
+            r, _, _ = select.select([sys.stdin], [], [], 0.12)
+            if not r:
+                if buf == "\033":              # Esc, with nothing following it
+                    return
+                buf = ""
+                continue
+            try:
+                chunk = os.read(fd, 64).decode("utf-8", "ignore")
+            except OSError:
+                return
+            if not chunk:                      # stdin closed under us
+                return
+            buf += chunk
+
+            while buf:
+                key, rest = next_key(buf)
+                if key is None:                # a sequence still arriving
+                    break
+                buf = rest
+                if key.startswith("\033[<"):
+                    if not click(d, st, sh, sel, key):
+                        return
+                    last = 0
+                    continue
+                if not step_key(d, st, sel, key):
+                    return
+                last = 0
     except KeyboardInterrupt:
         pass
     finally:
         if old:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        sys.stdout.write("\033[?1000l\033[?1006l\033[?25h")
+        sys.stdout.write("\033[?1000l\033[?1006l\033[?25h\033[?1049l")
+
+
+def step_key(d, st, sel, key):
+    """Act on one keystroke. False means the overview is done."""
+    wins = district(st, sel[0])
+    if key in ("q", "\033"):
+        return False
+    if key in ("\033[A", "k"):
+        sel[1] = max(0, sel[1] - 1)
+    elif key in ("\033[B", "j"):
+        sel[1] = min(max(0, len(wins) - 1), sel[1] + 1)
+    elif key in ("\033[D", "h", "\033[C", "l"):
+        step = -1 if key in ("\033[D", "h") else 1
+        sel[0] = PLACES[(PLACES.index(sel[0]) + step) % len(PLACES)]
+        sel[1] = 0
+    elif len(key) == 1 and key in "012345678":
+        sel[0], sel[1] = PLACES[int(key)], 0
+        fly(d, *frame(st, sel[0], screen(st)))
+    elif key == "u":
+        cmd_system([])
+        sel[0] = SUN
+    elif key == "a":
+        cmd_arrange([str(sel[0].n)])
+    elif key in ("\r", "\n"):
+        if wins:
+            dive(d, st, wins[min(sel[1], len(wins) - 1)])
+            return False
+    return True
+
+
+def click(d, st, sh, sel, seq):
+    """Act on one mouse report. False means the overview is done.
+
+    Clicking the map flies you there — and clicking the cell a planet is
+    drawn in means that planet, so the click lands on something meaningful
+    rather than a point in empty space near it. Clicking a row of the side
+    pane goes all the way: that window, focused, with the view on it.
+    """
+    try:
+        btn, col, row = (int(v) for v in seq[3:-1].split(";"))
+    except ValueError:
+        return True
+    if not seq.endswith("M") or btn != 0 or sh is None:
+        return True
+    c, r = col - 1 - LEFT, row - TOP
+    if 0 <= r < sh.h and 0 <= c < sh.w:
+        hit = next((q for q in PLACES if (sh.row(q.y), sh.col(q.x)) == (r, c)), None)
+        if hit:
+            sel[0], sel[1] = hit, 0
+            fly(d, *frame(st, hit, screen(st)))
+        else:
+            fly(d, *sh.world(c, r), z_or(d, 0.5))
+    elif c >= sh.w:
+        i = r - 3                              # the pane's list starts here
+        wins = district(st, sel[0])
+        if 0 <= i < len(wins):
+            sel[1] = i
+            dive(d, st, wins[i])
+            return False
+    return True
+
+
+def z_or(d, floor):
+    """Keep the zoom you had when clicking empty space, unless you are far out."""
+    z = d.zoom()
+    return z if z >= floor else 1.0
+
+
+def dive(d, st, w):
+    """Focus a window, bring it forward, and fly to it."""
+    d.focus(w["id"])
+    spotlight(d, st, w["id"])
+    fly(d, w["position"][0], w["position"][1], WORK_ZOOM)
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────
 CMDS = {"goto": cmd_goto, "hop": cmd_hop, "system": cmd_system, "send": cmd_send,
         "here": cmd_here, "menu": cmd_menu, "map": cmd_map, "help": cmd_help,
-        "arrange": cmd_arrange, "list": cmd_list, "plate": cmd_plate,
+        "arrange": cmd_arrange, "list": cmd_list, "plate": cmd_plate, "bar": cmd_bar,
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 
 

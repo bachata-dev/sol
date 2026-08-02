@@ -38,7 +38,7 @@ say "config installed to $CFG"
 
 # ── the sol command ───────────────────────────────────────────────────────
 say "installing sol to /usr/local/bin (sudo)"
-sudo install -m755 bin/sol bin/sol-help bin/driftwm-up /usr/local/bin/
+sudo install -m755 bin/sol bin/sol-help bin/sol-map bin/driftwm-up /usr/local/bin/
 # opt-in extras: installed, but nothing starts them until you say so
 sudo install -m755 bin/sol-planetarium bin/sol-spin /usr/local/bin/
 

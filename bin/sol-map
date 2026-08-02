@@ -1,0 +1,19 @@
+#!/bin/bash
+# Toggle the sol overview. Press mod+e again (or esc, or q) to dismiss it.
+#
+# The overview used to be a square parked in the corner of every screen, which
+# is why it is a toggle now: a map you are not reading should not be costing
+# you a corner. Nothing is remembered between openings — the window is the
+# state, and closing it hands the screen back.
+
+if pgrep -f "foot -a sol-ma[p]" > /dev/null; then
+  pkill -f "foot -a sol-ma[p]"
+  exit 0
+fi
+
+exec foot -a sol-map \
+  -o main.font='JetBrains Mono:size=10' \
+  -o colors.alpha=0.90 \
+  -o colors.background=16161e \
+  -o colors.foreground=c0caf5 \
+  -e sol map

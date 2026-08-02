@@ -8,6 +8,7 @@
 #   mod+left/right  sunward/outward  mod+u  whole system
 #   mod+tab   fly-to menu            mod+/  the keybinding card
 #   mod+a     tidy this planet       mod+n/p  step through its windows
+#   mod+e     the overview           (the whole system, named, on demand)
 #
 # THE RULE THIS FILE ENFORCES: the camera moves only when you ask it to.
 # Every automatic camera move driftwm offers is switched off below, and all
@@ -20,8 +21,6 @@ window_placement = "cursor"
 autostart = [
   "waybar -c ~/.config/driftwm/waybar.jsonc -s ~/.config/driftwm/waybar.css",
   "mako",
-  # the live system map, bottom right
-  "foot -a sol-map -o main.font='JetBrains Mono:size=9' -o colors.alpha=0.72 -e sol map",
   # planet name plates
   "foot -a planet-label-1 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
   "foot -a planet-label-2 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e0af68 -e sh ~/.config/driftwm/label.sh 2 VENUS comms",
@@ -103,6 +102,7 @@ animate_fps = 30
 "mod+u" = "spawn sol system"
 "mod+tab" = "spawn sol menu"
 "mod+slash" = "spawn sol-help"
+"mod+e" = "spawn sol-map"          # the overview: everything, named, on demand
 
 # ── a crowded planet ──
 # mod+a tidies the windows of wherever you are into a grid; mod+n / mod+p
@@ -215,19 +215,22 @@ position = [2823, 5694]
 app_id = "planet-label-8"
 position = [6692, 665]
 
-# The live system map, pinned bottom-right
+# The overview (mod+e). It used to be a 440x450 square parked bottom-right on
+# every screen, which at that size could resolve neither a district nor a name.
+# Now it is asked for, and it takes the room it needs to answer: full width, a
+# card for every district, and a pane naming what the planet you picked holds.
+# It takes focus on purpose — 1…8 fly, ⏎ drops you into the window you chose.
 [[window_rules]]
 app_id = "sol-map"
 pinned_to_screen = true
-position = [660, -350]
-size = [440, 450]
-focus_on_open = false
+position = [0, 0]
+size = [1180, 960]
 decoration = "minimal"
 blur = true
 border_width = 1
-border_color = "#292e42"
-border_color_focused = "#292e42"
-corner_radius = 10
+border_color = "#414868"
+border_color_focused = "#414868"
+corner_radius = 14
 
 # The keybinding card, centred and pinned while it is open
 [[window_rules]]
