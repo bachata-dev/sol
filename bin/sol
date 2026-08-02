@@ -635,9 +635,15 @@ CARD_HEAD = "// ── districts ──"
 CARD_TAIL = "// ── end districts ──"
 
 
-def bounds(st, place):
-    """The rectangle a district occupies: its windows and its world."""
-    wins = district(st, place)
+def bounds(st, place, skip=None):
+    """The rectangle a district occupies: its windows and its world.
+
+    `skip` leaves one window out of the reckoning. The drag-catcher needs
+    the card as it stood before the drag — a box that includes the window
+    you are holding stretches to wherever you drop it, and every drop in
+    the neighbourhood then reads as "still inside".
+    """
+    wins = [w for w in district(st, place) if w["id"] != skip]
     if not wins:
         return None
     boxes = [(w["position"], w["size"]) for w in wins]
@@ -1024,7 +1030,7 @@ def settle(d, wid):
     # away. The card is the district you can see, so dropping anywhere on it
     # means "put it here", and only leaving it means "it lives somewhere else
     # now".
-    box = bounds(st, was) if was else None
+    box = bounds(st, was, skip=wid) if was else None
     stayed = box is not None and abs(drop[0] - box[0]) <= box[2] \
         and abs(drop[1] - box[1]) <= box[3]
 
@@ -1404,22 +1410,38 @@ def cmd_prompt(args):
 
 
 def cmd_menu(args):
-    """The ☉ menu — everywhere you can go, and the few things you can do.
+    """The ☉ menu — a context menu for the place you are standing.
 
-    This is what the ☉ at the left of the bar opens, so it carries the same
-    weight as the  menu it sits where: the places first, with what each is
-    holding, then the handful of actions that are about the canvas itself.
+    Right-click has meant "a menu about what is here" for as long as there
+    have been desktops, so that is what this is: where you are at the top
+    with the things you would do to it, and only then the other places to
+    go. A plain list of eight destinations reads as teleportation — the
+    muscle memory it should borrow is the context menu's, not the portal's.
     """
     d = Drift()
     st = d.state()
     counts = census(st)
-    items = ["☉  Sun — home base"]
-    for p in PLANETS:
-        n = counts.get(p.n, 0)
-        items.append("%d  %s — %s%s" % (p.n, p.name, p.role,
-                                        "  ·  %d" % n if n else ""))
-    items += ["─  Overview", "─  Whole system", "─  Tidy this planet",
-              "─  Keybindings"]
+    place, on_it, n = whereabouts(st, d.camera(), d.zoom())
+    here = place if on_it and place is not None else None
+
+    if here is None:
+        items = ["▸  the system — all eight planets"]
+    elif here is SUN:
+        items = ["▸  Sun — home base"]
+    else:
+        items = ["▸  %d %s — %s%s" % (here.n, here.name, here.role,
+                                      "  ·  %d" % n if n else "")]
+    if here is not None and n:
+        items += ["─  Tidy this planet", "─  Step through its windows"]
+    items += ["─  Overview", "─  Whole system", "─  Keybindings"]
+    for p in PLACES:
+        if here is not None and p.n == here.n:
+            continue
+        c = counts.get(p.n, 0)
+        head = "☉" if p is SUN else str(p.n)
+        items.append("%s  %s — %s%s" % (head, p.name, p.role,
+                                        "  ·  %d" % c if c else ""))
+
     import subprocess
     cmd = ["fuzzel", "--dmenu", "--lines", str(len(items))]
     if os.path.exists(FUZZEL):        # ours if it is there, yours if it is not
@@ -1432,7 +1454,12 @@ def cmd_menu(args):
     if not out:
         return
     tail = out.split(None, 1)[-1].strip()
-    if out.startswith("☉"):
+    if out.startswith("▸"):
+        if here is None:
+            cmd_system([])
+        else:
+            cmd_goto(["sun" if here is SUN else str(here.n)])
+    elif out.startswith("☉"):
         cmd_goto(["sun"])
     elif not out.startswith("─"):
         cmd_goto([out.split()[0]])
@@ -1442,6 +1469,8 @@ def cmd_menu(args):
         cmd_system([])
     elif tail == "Tidy this planet":
         cmd_arrange([])
+    elif tail == "Step through its windows":
+        cmd_step([], 1)
     elif tail == "Keybindings":
         subprocess.Popen(["sol-help"], start_new_session=True)
 
@@ -1473,6 +1502,9 @@ HELP = """
    every window named, 1…8 to fly and ⏎ to drop into the one you picked.
    mod+; opens the command line in the footer. Drag a window onto another
    planet and it flies itself into that planet's grid.
+
+   THE MOUSE          right-click the sky   menu of where you are
+                      middle-click the sky  the overview · wheel  zoom
 
    FOUR FINGERS       swipe ←/→  next planet outward / sunward
                       swipe ↑/↓  the whole system / back to the Sun

@@ -152,15 +152,23 @@ animate_fps = 30
 "mod+k" = "spawn omarchy-menu-keybindings"
 "mod+escape" = "spawn omarchy-menu system"
 
+# On a window, sol binds nothing without a modifier: plain clicks belong to
+# the app. Middle-click in particular is paste, and a workspace that steals
+# paste to recenter the camera is trading a habit people have had for
+# decades for a trick they never asked for.
 [mouse.on-window]
 "alt+left" = "move-window"
 "alt+right" = "resize-window"
-"middle" = "focus-center"
 
 [mouse.on-canvas]
 "left" = "pan-viewport"
-"right" = "spawn sol menu"        # right-click the sky: everywhere you can go
-"middle" = "spawn sol system"     # and the whole system in one click
+# Right-click has meant "a menu about what is here" for as long as there have
+# been desktops, so the ☉ menu opens with where you are and what you would do
+# to it, before it offers anywhere else.
+"right" = "spawn sol menu"
+# And middle-click on the root has meant the window list since X11 had root
+# menus — which is what the overview is: every window, named.
+"middle" = "spawn sol-map"
 
 # ── the trackpad ──────────────────────────────────────────────────────────
 # Four fingers travel the system, borrowing the muscle memory everyone already

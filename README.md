@@ -87,9 +87,14 @@ desktops. Three fingers still pan and two still zoom, so nothing you already do 
 | pinch in / out | pull back to the system · drop into where you are |
 | four-finger hold | tidy this planet |
 
-On a mouse, **right-click the empty canvas** for the `☉` menu and **middle-click** for the whole
-system. driftwm has no double-click binding — its mouse triggers are left, right, middle and the two
-scroll wheels — so those two clicks are where a double-click's job went.
+On a mouse, the clicks follow the muscle memory they borrow from. **Right-click the sky** opens the
+`☉` menu as a context menu — where you are and what you would do to it first, then everywhere else —
+because right-click has meant "a menu about what is here" for as long as there have been desktops.
+**Middle-click the sky** opens the overview, which is the window list, which is what middle-click on
+the root has meant since X11 had root menus. And on a window sol binds no plain clicks at all:
+middle-click is paste, and it stays paste. driftwm has no double-click trigger, so "double-click a
+planet to go there" is one habit the canvas cannot borrow — clicking a window from far out flies you
+to it, which covers the same instinct.
 
 ## When a planet fills up
 
@@ -204,8 +209,9 @@ other modules' answers in a file for them to read, so eight planets' worth of ta
 
 ![the bar](screenshots/bar.png)
 
-**The `☉` menu** is what the sun at the far left opens, and what `mod+tab` brings up: everywhere you
-can go, with what each place is holding, then the few things that are about the canvas itself.
+**The `☉` menu** is what the sun at the far left opens, what `mod+tab` brings up, and what
+right-clicking the sky means: a context menu for wherever you are standing — this place and its
+actions first, then everywhere else with what each is holding.
 
 ![the menu](screenshots/menu.png)
 
@@ -304,6 +310,10 @@ Nothing below runs unless you turn it on, because each one moves the camera with
 - **The bar and the menu** — `waybar.jsonc` and `waybar.css` for the bar, `fuzzel.ini` for the ☉
   menu. Only `sol menu` reads that fuzzel config, so your own stays untouched; delete it and the
   menu falls back to whatever fuzzel already does.
+- **No trackpad?** — `tools/sol-hand.py` is an emulated hand: an absolute mouse, a relative mouse, a
+  four-finger touchpad and a keyboard, all through `/dev/uinput`, real enough that libinput runs its
+  actual gesture engine over them. Every swipe, pinch, click and drag above was verified with it,
+  over SSH, before it ever met a physical hand.
 
 ## What's real, and what isn't
 
