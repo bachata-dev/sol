@@ -76,6 +76,21 @@ Press **`mod+/`** at any time for this card on screen.
 Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
 flies you to it.
 
+**Four fingers travel the system**, borrowing the muscle memory you already have for switching
+desktops. Three fingers still pan and two still zoom, so nothing you already do changes:
+
+| | |
+|---|---|
+| swipe left / right | the next planet outward / sunward |
+| swipe up | the whole system |
+| swipe down | back to the Sun |
+| pinch in / out | pull back to the system · drop into where you are |
+| four-finger hold | tidy this planet |
+
+On a mouse, **right-click the empty canvas** for the `☉` menu and **middle-click** for the whole
+system. driftwm has no double-click binding — its mouse triggers are left, right, middle and the two
+scroll wheels — so those two clicks are where a double-click's job went.
+
 ## When a planet fills up
 
 Ten terminals on Earth used to be ten terminals in a heap, each one 28 pixels down and to the right
@@ -325,7 +340,7 @@ likely to need a nudge. Issues and PRs welcome.
 
 - [driftwm](https://github.com/malbiruk/driftwm) by Klim Kostiuk — the infinite-canvas compositor
   that makes any of this possible
-- [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) palette by enkia
+- Several palette hues began in [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) by enkia
 
 ## License
 

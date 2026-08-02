@@ -1,7 +1,7 @@
 // sol — our solar system, as the driftwm canvas background.
 //
 // The Sun sits at the canvas origin, at a focus of eight real ellipses. The
-// planets sit where they really were on 2026-07-30 — placed by solving
+// planets sit where they really were on 2029-01-01 — placed by solving
 // Kepler's equation, so each one rides its own orbit line — ordered outward:
 // Mercury, Venus, Earth, Mars, [asteroid belt], Jupiter, Saturn, Uranus,
 // Neptune. Eccentricity and perihelion direction are real; only the spacing
@@ -20,7 +20,8 @@ uniform vec2 u_camera;
 uniform float u_time;
 uniform float u_zoom;
 
-// Palette (Tokyo Night)
+// Palette. Cool and dark so the astronomy can sit behind your work without
+// competing with it; several hues started life in Tokyo Night and drifted.
 const vec3 SPACE_TOP = vec3(0.055, 0.055, 0.078);
 const vec3 SPACE_BOT = vec3(0.078, 0.082, 0.118);
 const vec3 STARLIGHT = vec3(0.753, 0.792, 0.961);
@@ -30,35 +31,35 @@ const vec3 SUN_LIMB  = vec3(1.000, 0.678, 0.255);   // amber, where it cools
 const vec3 SUN_GLOW  = vec3(0.976, 0.667, 0.333);   // the corona beyond it
 
 // Planet positions in shader space = driftwm canvas (x, y) with y negated.
-const vec2 P1 = vec2(  934.0,   141.0);   // Mercury
-const vec2 P2 = vec2( -512.0,  1753.0);   // Venus
-const vec2 P3 = vec2( 1595.0,  2154.0);   // Earth
-const vec2 P4 = vec2( 2057.0, -2649.0);   // Mars
-const vec2 P5 = vec2(-2561.0, -3512.0);   // Jupiter
-const vec2 P6 = vec2( 4997.0,  -768.0);   // Saturn
-const vec2 P7 = vec2( 2823.0, -5294.0);   // Uranus
-const vec2 P8 = vec2( 6692.0,  -265.0);   // Neptune
+const vec2 P1 = vec2(     789.0,     -331.0);   // Mercury
+const vec2 P2 = vec2(   -1089.0,     1461.0);   // Venus
+const vec2 P3 = vec2(    -471.0,    -2553.0);   // Earth
+const vec2 P4 = vec2(   -3202.0,    -2007.0);   // Mars
+const vec2 P5 = vec2(   -4344.0,     1125.0);   // Jupiter
+const vec2 P6 = vec2(    3789.0,    -3146.0);   // Saturn
+const vec2 P7 = vec2(    1826.0,    -5663.0);   // Uranus
+const vec2 P8 = vec2(    6634.0,     -890.0);   // Neptune
 
 // Orbits, as ellipses: centre.xy (offset from the Sun, which is at a focus),
 // semi-major, semi-minor. R is the perihelion direction, which is the
 // ellipse's own axis — this is why Mercury's ring is visibly off-centre and
 // Venus's is not. Regenerate with tools/sol-positions.py.
-const vec4 O1 = vec4(  -44.5,   200.8, 1000.0,  978.63);   // Mercury
-const vec4 O2 = vec4(    8.2,     9.2, 1820.0, 1819.96);   // Venus
-const vec4 O3 = vec4(    9.9,    43.0, 2640.0, 2639.63);   // Earth
-const vec4 O4 = vec4( -295.7,  -130.6, 3460.0, 3444.87);   // Mars
-const vec4 O5 = vec4( -200.1,    52.8, 4280.0, 4274.99);   // Jupiter
-const vec4 O6 = vec4(   11.9,   273.7, 5100.0, 5092.63);   // Saturn
-const vec4 O7 = vec4(  276.3,    43.5, 5920.0, 5913.39);   // Uranus
-const vec4 O8 = vec4(  -41.1,    40.9, 6740.0, 6739.75);   // Neptune
-const vec2 R1 = vec2( 0.21643, -0.97630);
+const vec4 O1 = vec4(    -44.5,     200.8, 1000.0,   978.63);  // Mercury
+const vec4 O2 = vec4(      8.2,       9.2, 1820.0,  1819.96);  // Venus
+const vec4 O3 = vec4(      9.9,      42.9, 2640.0,  2639.63);  // Earth
+const vec4 O4 = vec4(   -295.7,    -130.5, 3460.0,  3444.87);  // Mars
+const vec4 O5 = vec4(   -200.1,      52.8, 4280.0,  4274.99);  // Jupiter
+const vec4 O6 = vec4(     11.8,     273.7, 5100.0,  5092.64);  // Saturn
+const vec4 O7 = vec4(    276.3,      43.4, 5920.0,  5913.39);  // Uranus
+const vec4 O8 = vec4(    -41.1,      40.9, 6740.0,  6739.75);  // Neptune
+const vec2 R1 = vec2( 0.21637, -0.97631);
 const vec2 R2 = vec2(-0.66397, -0.74776);
-const vec2 R3 = vec2(-0.22535, -0.97428);
-const vec2 R4 = vec2( 0.91478,  0.40395);
-const vec2 R5 = vec2( 0.96689, -0.25519);
-const vec2 R6 = vec2(-0.04340, -0.99906);
-const vec2 R7 = vec2(-0.98786, -0.15535);
-const vec2 R8 = vec2( 0.70860, -0.70561);
+const vec2 R3 = vec2(-0.22549, -0.97425);
+const vec2 R4 = vec2( 0.91486,  0.40378);
+const vec2 R5 = vec2( 0.96687, -0.25528);
+const vec2 R6 = vec2(-0.04322, -0.99907);
+const vec2 R7 = vec2(-0.98789, -0.15518);
+const vec2 R8 = vec2( 0.70869, -0.70552);
 
 const vec3 C0 = vec3(0.941, 0.851, 0.604);   // the Sun, for its own district
 const vec3 C1 = vec3(0.604, 0.647, 0.808);

@@ -18,6 +18,7 @@ ease-in-out curve — so the view always travels, and never jumps.
 
   sol goto <name|number|sun>   fly to a planet; again to dive into its windows
   sol hop <in|out>             fly to the next planet sunward / outward
+  sol dive                     go to the place the view is already at
   sol system                   frame the whole solar system
   sol arrange [where|all]      tidy a planet's windows into a grid
   sol next / sol prev          step through the windows of this planet
@@ -40,7 +41,7 @@ import time
 from collections import namedtuple
 
 # ── The solar system ──────────────────────────────────────────────────────
-# Canvas coordinates (Y-up), from the real sky for 2026-07-30: each planet is
+# Canvas coordinates (Y-up), from the real sky for 2029-01-01: each planet is
 # placed by solving Kepler's equation, so it sits on its own ellipse at the
 # angle it really occupied. Orbits keep their real eccentricity and perihelion
 # direction — the Sun is at a focus, not the centre — while the semi-major
@@ -49,14 +50,14 @@ from collections import namedtuple
 Planet = namedtuple("Planet", "n name x y a e peri body colour role")
 #             n  name        x      y     a   ecc     perihelion° body  colour   role
 PLANETS = [
-    Planet(1, "Mercury",   934,  -141, 1000, 0.20564,   77.50,  76, "#9aa5ce", "quick"),
-    Planet(2, "Venus",    -512, -1753, 1820, 0.00677,  131.60, 103, "#e0af68", "comms"),
-    Planet(3, "Earth",    1595, -2154, 2640, 0.01670,  103.02, 105, "#7aa2f7", "home"),
-    Planet(4, "Mars",     2057,  2649, 3460, 0.09342,  -23.83,  85, "#f7768e", "ops"),
-    Planet(5, "Jupiter", -2561,  3512, 4280, 0.04835,   14.78, 233, "#ff9e64", "builds"),
-    Planet(6, "Saturn",   4997,   768, 5100, 0.05373,   92.49, 220, "#e6cfa1", "media"),
-    Planet(7, "Uranus",   2823,  5294, 5920, 0.04725,  171.06, 166, "#7dcfff", "spare"),
-    Planet(8, "Neptune",  6692,   265, 6740, 0.00860,   44.88, 165, "#5a7fd0", "archive"),
+    Planet(1, "Mercury",    789,    331, 1000, 0.20564,   77.50,  76, "#9aa5ce", "quick"),
+    Planet(2, "Venus",  -1089,  -1461, 1820, 0.00676,  131.60, 103, "#e0af68", "comms"),
+    Planet(3, "Earth",   -471,   2553, 2640, 0.01670,  103.03, 105, "#7aa2f7", "home"),
+    Planet(4, "Mars",  -3202,   2007, 3460, 0.09342,  -23.81,  85, "#f7768e", "ops"),
+    Planet(5, "Jupiter",  -4344,  -1125, 4280, 0.04835,   14.79, 233, "#ff9e64", "builds"),
+    Planet(6, "Saturn",   3789,   3146, 5100, 0.05371,   92.48, 220, "#e6cfa1", "media"),
+    Planet(7, "Uranus",   1826,   5663, 5920, 0.04724,  171.07, 166, "#7dcfff", "spare"),
+    Planet(8, "Neptune",   6634,    890, 6740, 0.00861,   44.87, 165, "#5a7fd0", "archive"),
 ]
 SUN = Planet(0, "Sun", 0, 0, 0, 0.0, 0.0, 502, "#f0d99a", "home base")
 PLACES = [SUN] + PLANETS
@@ -721,6 +722,18 @@ def cmd_goto(args):
                 fly(d, w["position"][0], w["position"][1], WORK_ZOOM)
                 return
     fly(d, fx, fy, fz)
+
+
+def cmd_dive(args):
+    """Go to wherever the view already is — and again, into its windows.
+
+    What a pinch-out means when the canvas has places in it: not "zoom in a
+    bit" but "take me into the one I am looking at". It is `goto` pointed at
+    the nearest place, so a second pinch drops you into a window exactly as a
+    second `mod+3` would.
+    """
+    here, _ = nearest(*Drift().camera())
+    cmd_goto(["sun" if here is SUN else str(here.n)])
 
 
 def cmd_hop(args):
@@ -1458,7 +1471,13 @@ HELP = """
 
    mod+e opens the overview: the whole system at a size that resolves,
    every window named, 1…8 to fly and ⏎ to drop into the one you picked.
-   The strip in the bar counts what each planet is holding meanwhile.
+   mod+; opens the command line in the footer. Drag a window onto another
+   planet and it flies itself into that planet's grid.
+
+   FOUR FINGERS       swipe ←/→  next planet outward / sunward
+                      swipe ↑/↓  the whole system / back to the Sun
+                      pinch      out to the system, in to where you are
+                      hold       tidy this planet
 
    1 Mercury quick   3 Earth home    5 Jupiter builds  7 Uranus spare
    2 Venus   comms   4 Mars   ops    6 Saturn  media   8 Neptune archive
@@ -1914,7 +1933,7 @@ def dive(d, st, w):
 
 
 # ── Entry ─────────────────────────────────────────────────────────────────
-CMDS = {"goto": cmd_goto, "hop": cmd_hop, "system": cmd_system, "send": cmd_send,
+CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system, "send": cmd_send,
         "here": cmd_here, "menu": cmd_menu, "map": cmd_map, "help": cmd_help,
         "arrange": cmd_arrange, "list": cmd_list, "plate": cmd_plate, "bar": cmd_bar,
         "watch": cmd_watch, "prompt": cmd_prompt,

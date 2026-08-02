@@ -159,7 +159,27 @@ animate_fps = 30
 
 [mouse.on-canvas]
 "left" = "pan-viewport"
-"middle" = "spawn sol menu"
+"right" = "spawn sol menu"        # right-click the sky: everywhere you can go
+"middle" = "spawn sol system"     # and the whole system in one click
+
+# ── the trackpad ──────────────────────────────────────────────────────────
+# Four fingers travel the system, borrowing the muscle memory everyone already
+# has for switching desktops: swipe sideways to move between planets, up for
+# the whole system, down for home. Three fingers still pan and two still zoom,
+# so nothing you already do changes — this is only the layer that knows the
+# canvas has places in it.
+#
+# driftwm has no double-click binding (triggers are left/right/middle and the
+# scroll wheels), so the pointer equivalents live on right- and middle-click
+# above rather than on a second click.
+[gestures.anywhere]
+"4-finger-swipe-left" = "spawn sol hop out"    # outward, away from the Sun
+"4-finger-swipe-right" = "spawn sol hop in"    # sunward
+"4-finger-swipe-up" = "spawn sol system"       # everything at once
+"4-finger-swipe-down" = "spawn sol goto sun"   # and back to the middle
+"4-finger-pinch-in" = "spawn sol system"       # pull back to the whole system
+"4-finger-pinch-out" = "spawn sol dive"        # or drop into where you are
+"4-finger-hold" = "spawn sol arrange"          # tidy this planet
 
 # ── MACHINE-SPECIFIC: your display ────────────────────────────────────────
 # Find the connector name under outputs.* in `driftwm msg state`.
@@ -179,7 +199,7 @@ blur = true
 # The terminal that opens on Earth (home)
 [[window_rules]]
 app_id = "home-term"
-position = [1595, -2154]
+position = [-471, 2553]
 size = [1200, 720]
 
 # Planet name plates. Deliberately NOT widgets: driftwm limits how far you can
@@ -194,35 +214,35 @@ size = [660, 78]
 
 [[window_rules]]
 app_id = "planet-label-1"
-position = [934, 259]
+position = [789, 731]
 
 [[window_rules]]
 app_id = "planet-label-2"
-position = [-512, -1353]
+position = [-1089, -1061]
 
 [[window_rules]]
 app_id = "planet-label-3"
-position = [1595, -1754]
+position = [-471, 2953]
 
 [[window_rules]]
 app_id = "planet-label-4"
-position = [2057, 3049]
+position = [-3202, 2407]
 
 [[window_rules]]
 app_id = "planet-label-5"
-position = [-2561, 3912]
+position = [-4344, -725]
 
 [[window_rules]]
 app_id = "planet-label-6"
-position = [4997, 1168]
+position = [3789, 3546]
 
 [[window_rules]]
 app_id = "planet-label-7"
-position = [2823, 5694]
+position = [1826, 6063]
 
 [[window_rules]]
 app_id = "planet-label-8"
-position = [6692, 665]
+position = [6634, 1290]
 
 # The overview (mod+e). It used to be a 440x450 square parked bottom-right on
 # every screen, which at that size could resolve neither a district nor a name.
@@ -259,7 +279,7 @@ border_color_focused = "#7aa2f7"
 app_id = "sol-help"
 pinned_to_screen = true
 position = [0, 0]
-size = [900, 620]
+size = [920, 830]
 decoration = "minimal"
 blur = true
 corner_radius = 14
