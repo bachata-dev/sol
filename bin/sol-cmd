@@ -1,0 +1,19 @@
+#!/bin/bash
+# Toggle sol's command line — the footer's other half.
+#
+# The bar along the bottom is a status line until you ask it something. This
+# opens a one-line terminal directly above it, styled to match, running the
+# same CLI everything else goes through. Enter runs, esc or mod+; dismisses.
+
+if pgrep -f "foot -a sol-cm[d]" > /dev/null; then
+  pkill -f "foot -a sol-cm[d]"
+  exit 0
+fi
+
+exec foot -a sol-cmd \
+  -o main.font='JetBrains Mono:size=11' \
+  -o colors.alpha=0.94 \
+  -o colors.background=16161e \
+  -o colors.foreground=c0caf5 \
+  -o main.pad=10x6 \
+  -e sol prompt

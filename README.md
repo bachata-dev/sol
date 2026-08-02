@@ -68,9 +68,10 @@ Press **`mod+/`** at any time for this card on screen.
 | `mod+0` | fly to the Sun | **A crowded planet** | |
 | `mod+left` / `mod+right` | sunward / outward | `mod+a` | tidy this planet into a grid |
 | `mod+u` | whole system view | `mod+n` / `mod+p` | step through its windows |
-| `mod+e` | the overview | **Do** | |
-| `mod+tab` | fly-to menu | `mod+return` `mod+space` | terminal · launcher |
-| | | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
+| `mod+e` | the overview | `mod+shift+left` / `right` | move it a slot along the grid |
+| `mod+tab` | fly-to menu | **Do** | |
+| `mod+;` | the command line | `mod+return` `mod+space` | terminal · launcher |
+| drag a window | to another planet | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
 
 Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
 flies you to it.
@@ -98,17 +99,55 @@ of the last. Now a planet holds a **district**, and sol knows what is in it:
 
 A window belongs where you put it. `mod+ctrl+3` and `mod+a` write that down, which matters because a
 tidy district is wider than the gap between planets — without it the far corner of Earth's grid
-would defect to Mercury. Drag a window off somewhere else and it belongs to whatever it is nearest
-again.
+would defect to Mercury.
 
 ![a planet with a full district](screenshots/district.png)
+
+## Carrying one there by hand
+
+**Drag a window onto another planet and let go.** driftwm has always let you move a window anywhere
+on the canvas; what it cannot know is that Jupiter is a place. So sol watches for the drop, and
+finishes the journey:
+
+- **The room makes space first.** Jupiter's grid slides apart to open the slot nearest where you
+  dropped, while the window waits where you left it.
+- **Then it crosses**, on a path that bows away from the Sun. It is making a transfer between two
+  orbits, and a transfer is not a straight line.
+- **The district it left closes the gap** behind it, and both cards reflow.
+
+Drop it back inside its own district instead and it takes the slot you dropped it on, shuffling the
+others around it — which is how you order a grid. `mod+shift+left` / `mod+shift+right` move the
+focused window one slot without touching the mouse.
+
+Underneath all of it is one change: **windows travel now.** They used to jump to their new positions;
+they are streamed along an eased path at 90 Hz, the same way the camera has always moved. `mod+a` is
+worth watching for that reason alone.
+
+## When a planet fills right up
+
+A grid can only grow so far before framing it puts the windows below the size at which they are any
+use — and driftwm's IPC has no resize, so shrinking them to fit is not on the table. What is left is
+to stop laying all of them out.
+
+So the grid holds the **twelve most recently used** and the rest collapse into a **stack** at its
+corner: offset, dimmed, each one a step further back than the last. They are still there, still
+counted, still reachable with `mod+n` — and touching one brings it to the front while the
+least-recent drops onto the pile. The bar and the plate read `home · 12 + 5`, so you can see the
+shape of it without going and looking.
+
+The order a drag or `mod+shift+left` writes is the same order that decides this, so how a district is
+arranged and how recently you used things are one mechanism rather than two.
+
+![a planet with more than fits](screenshots/stack.png)
 
 ## What you see
 
 **The canvas** is a single GLSL fragment shader: the Sun with its corona, eight orbit ellipses drawn
 with the Sun at a focus — so Mercury's is visibly off-centre and Venus's is not — planets lit with a
 real day/night terminator facing the Sun, Saturn's ring, a sparse asteroid belt, and a parallaxed
-starfield. Every orbit is a soft hairline with a faint bloom and no hard edge, held at a constant
+starfield. Each world wears the face its own kind has — the gas giants banded along their
+latitudes, crowding towards the poles the way projected latitudes really do; the rocky ones blotched
+where their surfaces differ; Venus almost blank, because Venus is almost blank. Every orbit is a soft hairline with a faint bloom and no hard edge, held at a constant
 weight in screen pixels so it never thickens as you pull back. Each planet pools its colour into the
 space around it, and each district gets a rounded card in that colour behind its windows. It costs
 no windows and no meaningful CPU.
@@ -154,6 +193,16 @@ other modules' answers in a file for them to read, so eight planets' worth of ta
 can go, with what each place is holding, then the few things that are about the canvas itself.
 
 ![the menu](screenshots/menu.png)
+
+**The footer** is the same bar upside down. The header says where you are; this one says what sol
+last did — `arrange 3 · just now` — and it reserves its 28 pixels at the screen edge rather than
+floating over your windows.
+
+Press **`mod+;`** and it opens into a command line above itself: any `sol` command, with tab
+completion over the subcommands, the planets and the roles. A bare place name is taken as `goto`,
+because "jupiter" is what you would type if nobody had told you a verb was expected.
+
+![the footer, and its command line](screenshots/footer.png)
 
 **Name plates** float beside each planet, naming it and counting what it holds — "3  E A R T H
 home · 10". They're ordinary windows on purpose: driftwm limits how far you can zoom out to half the
@@ -205,7 +254,9 @@ sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
 sol menu          # the ☉ menu: everywhere to go, and what to do
 sol map           # the overview (runs inside a terminal; sol-map toggles it)
-sol bar strip     # one line of the bar — where, holding, or strip
+sol bar strip     # one line of the bar — where, holding, strip, or last
+sol shift back    # move the focused window a slot along its grid
+sol watch         # catch windows dragged between planets (runs from autostart)
 sol help          # the keybinding card
 ```
 

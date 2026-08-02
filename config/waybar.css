@@ -126,3 +126,36 @@ tooltip label {
 #network.disconnected {
   color: #f7768e;
 }
+
+/* ── the footer ───────────────────────────────────────────────────────────
+   Same bar, upside down. The header says where you are; this says what you
+   just did, and opens into a command line when you ask it to. It reserves
+   its 28px at the bottom edge rather than floating, so nothing hides behind
+   it — the lesson of the map that used to sit in the corner. */
+
+window#waybar.bottom {
+  background: rgba(22, 22, 30, 0.52);
+  border-bottom: none;
+  border-top: 1px solid rgba(65, 72, 104, 0.45);
+}
+
+/* The prompt, waiting to be asked something. */
+#custom-prompt {
+  color: #f0d99a;
+  font-family: "Noto Sans Symbols2", "Noto Sans Symbols", sans-serif;
+  font-size: 12px;
+  padding: 4px 14px 0 14px;
+}
+
+/* What sol last did, right-aligned and quiet — a record, not an alert. */
+#custom-last {
+  color: #565f89;
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 11px;
+  padding: 0 14px 0 8px;
+}
+
+#custom-prompt:hover,
+#custom-last:hover {
+  background: rgba(192, 202, 245, 0.08);
+}

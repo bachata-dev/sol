@@ -1,0 +1,30 @@
+// The footer. Same grammar as the header, turned upside down: where the top
+// bar says where you are, this one says what you just did — and unlike the
+// map that used to sit in the corner, it reserves its 28px at the screen edge
+// rather than floating over your windows, so nothing is ever hidden behind it.
+//
+// Idle it is a status line. Press mod+; and a command line opens over it,
+// takes any sol command with tab completion, and closes again.
+//
+// It asks driftwm nothing: both modules read the file `sol here` already
+// leaves behind for the header.
+{
+  "layer": "top",
+  "position": "bottom",
+  "height": 28,
+  "modules-left": ["custom/prompt"],
+  "modules-right": ["custom/last"],
+
+  "custom/prompt": {
+    "format": "☉ ▸",
+    "on-click": "sol-cmd",
+    "tooltip": false
+  },
+
+  "custom/last": {
+    "exec": "sol bar last",
+    "return-type": "json",
+    "interval": 2,
+    "on-click": "sol-cmd"
+  }
+}

@@ -25,8 +25,9 @@ const vec3 SPACE_TOP = vec3(0.055, 0.055, 0.078);
 const vec3 SPACE_BOT = vec3(0.078, 0.082, 0.118);
 const vec3 STARLIGHT = vec3(0.753, 0.792, 0.961);
 const vec3 ORBIT_COL = vec3(0.337, 0.373, 0.537);
-const vec3 SUN_CORE  = vec3(1.000, 0.965, 0.878);
-const vec3 SUN_GLOW  = vec3(0.941, 0.737, 0.408);
+const vec3 SUN_CORE  = vec3(1.000, 0.976, 0.898);   // the hot centre
+const vec3 SUN_LIMB  = vec3(1.000, 0.678, 0.255);   // amber, where it cools
+const vec3 SUN_GLOW  = vec3(0.976, 0.667, 0.333);   // the corona beyond it
 
 // Planet positions in shader space = driftwm canvas (x, y) with y negated.
 const vec2 P1 = vec2(  934.0,   141.0);   // Mercury
@@ -116,8 +117,29 @@ float orbit_line(float dist, float px) {
     return exp(-a / px) * 0.72 + exp(-a / (px * 5.0)) * 0.28;
 }
 
+// What a planet's face is made of. Two numbers, because two are enough to
+// tell the kinds of world apart: gas giants are banded along their latitudes
+// and the rocky ones are blotched where their surfaces differ.
+//
+// The disc is a projected sphere, so latitude comes from asin() rather than
+// straight from y — which is what makes the bands crowd together towards the
+// poles the way they really do, instead of marching evenly down the face. A
+// little noise warps them so they are not drawn with a ruler, and everything
+// fades out at the limb where the surface is turning away from you.
+float face(vec2 d, float rad, float band, float mottle) {
+    vec2 n = d / max(rad, 1.0);
+    float z2 = 1.0 - dot(n, n);
+    if (z2 <= 0.0) return 0.0;
+    float lat = asin(clamp(n.y, -1.0, 1.0));
+    float warp = noise(vec2(n.x * 2.2, lat * 3.4)) - 0.5;
+    float bands = sin(lat * 9.0 + warp * 1.7) * band;
+    float blots = (noise(n * 5.0 + 3.7) - 0.5) * 2.0 * mottle;
+    return (bands + blots) * sqrt(z2);
+}
+
 // A planet: lit disc with a terminator facing the Sun, plus a thin atmosphere.
-vec3 planet(vec2 c, vec2 p, float rad, vec3 tint, float bloom) {
+vec3 planet(vec2 c, vec2 p, float rad, vec3 tint, float bloom,
+            float band, float mottle) {
     vec2 d = c - p;
     float r = length(d);
     if (r > rad * 4.0) return vec3(0.0);
@@ -125,7 +147,7 @@ vec3 planet(vec2 c, vec2 p, float rad, vec3 tint, float bloom) {
     vec2 sunward = normalize(-p);                       // the Sun is at the origin
     float lit = 0.18 + 0.82 * clamp(dot(d / max(rad, 1.0), sunward) * 0.5 + 0.62, 0.0, 1.0);
     float atmo = exp(-abs(r - rad) * 0.05) * 0.30;
-    return tint * (disc * lit + atmo) * bloom;
+    return tint * (disc * lit * (1.0 + face(d, rad, band, mottle)) + atmo) * bloom;
 }
 
 // Neighbourhood halo, so a window parked at a planet sits in a pool of that
@@ -211,23 +233,51 @@ void main() {
     // rule as the planets, which at 109 Earth radii makes it far and away the
     // largest thing here — so, like the rest of the astronomy, it is held
     // down at working zoom and blooms only as you pull back.
-    if (r < 2000.0) {
+    //
+    // The disc is not one flat colour, because a flat disc is exactly what
+    // made it look pale. A star reads as a sphere for the same reason a
+    // planet does: the edge is cooler and dimmer than the middle. So the
+    // colour walks from a near-white core out to amber at the limb and
+    // darkens as it goes, over a slow granulation that keeps it from
+    // looking painted.
+    if (r < 2600.0) {
         float ang = atan(c.y, c.x);
         float flick = 0.88 + 0.12 * noise(vec2(ang * 3.0, u_time * 0.35));
-        col += SUN_GLOW * exp(-r * 0.0026) * flick * (0.12 + uf * 0.20);
-        col += SUN_CORE * (1.0 - smoothstep(SUN_R * 0.80, SUN_R, r))
+
+        // Corona in two falloffs: a tight one that hugs the limb, and a wide
+        // faint one that reaches out towards Mercury. Between them they come
+        // to about what the single falloff they replaced did — the point of
+        // the second is the shape of the fade, not more light.
+        col += SUN_GLOW * exp(-r * 0.0040) * flick * (0.09 + uf * 0.17);
+        col += SUN_GLOW * exp(-r * 0.0011) * flick * (0.03 + uf * 0.06);
+
+        // The disc keeps exactly the brightness it always had. What changed
+        // is where that brightness goes: concentrated in the core and falling
+        // away to a cooler limb, rather than spread flat across the whole
+        // face. Pale was never a shortage of light, it was a shortage of
+        // contrast.
+        float d = clamp(r / SUN_R, 0.0, 1.0);
+        float mu = sqrt(max(0.0, 1.0 - d * d));       // cosine of the view angle
+        float limb = 0.34 + 0.66 * pow(mu, 0.55);     // the classic darkening law
+        float gran = 0.94 + 0.06 * noise(c * 0.014 + u_time * 0.02);
+        col += mix(SUN_LIMB, SUN_CORE, limb) * limb * gran
+             * (1.0 - smoothstep(SUN_R * 0.98, SUN_R * 1.015, r))
              * (0.12 + uf * 0.66);
     }
 
-    // Planets
-    col += planet(c, P1,  76.0, C1, bloom);
-    col += planet(c, P2, 103.0, C2, bloom);
-    col += planet(c, P3, 105.0, C3, bloom);
-    col += planet(c, P4,  85.0, C4, bloom);
-    col += planet(c, P5, 233.0, C5, bloom);
-    col += planet(c, P6, 220.0, C6, bloom);
-    col += planet(c, P7, 166.0, C7, bloom);
-    col += planet(c, P8, 165.0, C8, bloom);
+    // Planets, each with the face its own kind of world has: banding for the
+    // gas giants, mottling for the rocky ones. Venus is nearly blank because
+    // Venus is nearly blank — an unbroken deck of cloud — and Uranus is the
+    // smoothest thing in the system.
+    //                                     band  mottle
+    col += planet(c, P1,  76.0, C1, bloom, 0.00, 0.18);   // Mercury, cratered
+    col += planet(c, P2, 103.0, C2, bloom, 0.03, 0.05);   // Venus, featureless
+    col += planet(c, P3, 105.0, C3, bloom, 0.00, 0.16);   // Earth, land and sea
+    col += planet(c, P4,  85.0, C4, bloom, 0.00, 0.20);   // Mars, albedo marks
+    col += planet(c, P5, 233.0, C5, bloom, 0.16, 0.03);   // Jupiter, belts
+    col += planet(c, P6, 220.0, C6, bloom, 0.10, 0.02);   // Saturn, fainter
+    col += planet(c, P7, 166.0, C7, bloom, 0.03, 0.00);   // Uranus, smooth
+    col += planet(c, P8, 165.0, C8, bloom, 0.05, 0.03);   // Neptune, faint bands
 
     // Saturn's ring, at the real 2.35 planet radii of the A ring's outer edge
     vec2 sd = c - P6;

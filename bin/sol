@@ -123,6 +123,21 @@ class Drift:
         # the coordinates you asked for, having moved nothing.
         self.req({"Move": [int(wid), [int(round(x)), int(round(y))]]})
 
+    def move_many(self, items):
+        """A whole frame of window moves on one flush.
+
+        A glide sends every window it is animating each tick. Done one at a
+        time that is a round trip apiece; written together and read back
+        together it is a single one, which is the difference between a frame
+        costing 0.45ms and costing 0.07ms.
+        """
+        for wid, x, y in items:
+            self.f.write((json.dumps(
+                {"Move": [int(wid), [int(round(x)), int(round(y))]]}) + "\n").encode())
+        self.f.flush()
+        for _ in items:
+            self.f.readline()
+
     def focus(self, wid):
         self.req({"Focus": int(wid)})
 
@@ -191,6 +206,109 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
         time.sleep(1.0 / rate)
 
 
+# ── Windows travel too ────────────────────────────────────────────────────
+# The camera has always travelled rather than jumped; the windows had not.
+# They do now, through the same machinery: an eased path streamed at 90 Hz and
+# paced against a deadline, so a move takes the time it says it will.
+#
+# `arc` bows the path away from the Sun. A window crossing from one planet to
+# another is making a transfer, and a transfer is not a straight line — the
+# curve is the honest shape, and it is also the one that reads as travelling
+# somewhere rather than sliding across a desk.
+GLIDE_RATE = 90
+ARC = 0.16             # how far a between-planets path bows outward
+MOVING = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-moving")
+
+
+def glide(d, moves, arc=0.0, rate=GLIDE_RATE):
+    """Move windows along eased paths. Never jumps.
+
+    `moves` is (window id, from, to). Anything already where it belongs is
+    dropped, so calling this after a tidy that changed nothing costs nothing.
+    """
+    plan = [(int(w), (float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
+            for w, a, b in moves
+            if (round(a[0]), round(a[1])) != (round(b[0]), round(b[1]))]
+    if not plan:
+        return
+    far = max(math.hypot(b[0] - a[0], b[1] - a[1]) for _, a, b in plan)
+    dur = 0.20 + 0.40 * min(1.0, far / 4000.0)
+
+    # The control point of a quadratic bend: the midpoint of the path, pushed
+    # straight out from the Sun by a fraction of the distance being crossed.
+    ctrl = []
+    for _, a, b in plan:
+        mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
+        out = math.hypot(mx, my) or 1.0
+        k = arc * math.hypot(b[0] - a[0], b[1] - a[1])
+        ctrl.append((mx + mx / out * k, my + my / out * k))
+
+    with moving():
+        steps = max(2, int(dur * rate))
+        start = time.perf_counter()
+        for i in range(1, steps + 1):
+            t = i / steps
+            e = 0.5 - 0.5 * math.cos(math.pi * t)      # ease in-out
+            u = 1.0 - e
+            d.move_many([(wid,
+                          u * u * a[0] + 2 * u * e * c[0] + e * e * b[0],
+                          u * u * a[1] + 2 * u * e * c[1] + e * e * b[1])
+                         for (wid, a, b), c in zip(plan, ctrl)])
+            moving.touch()          # a long glide must not go stale mid-flight
+            ahead = (start + t * dur) - time.perf_counter()
+            if ahead > 0:
+                time.sleep(ahead)
+        d.move_many([(wid, b[0], b[1]) for wid, _, b in plan])
+
+
+class moving:
+    """Marks the window moves as sol's own, so `sol watch` ignores them.
+
+    The watcher cannot tell a window you dragged from a window sol is putting
+    away — both arrive as the same position events. So sol says so, by keeping
+    a file freshly stamped for as long as it is moving anything.
+
+    It is a stamp rather than a flag because the events are asynchronous: the
+    last few frames of a glide are still in flight when the glide itself has
+    returned, and a flag cleared on the way out lets them through as though
+    you had just dropped something. That is not hypothetical — it re-homed a
+    window to Venus, because the far edge of Earth's grid is genuinely nearer
+    Venus than Earth, which is the whole reason claims exist. So the stamp
+    keeps reading busy for COOLDOWN after the last move, which is long enough
+    for the tail to arrive and short enough that a real drag a moment later is
+    still caught. Nothing needs deleting: a stamp nobody refreshes goes stale
+    on its own, so even a crash mid-move only deafens the watcher for a blink.
+    """
+
+    COOLDOWN = 0.35
+    depth = 0
+
+    def __enter__(self):
+        moving.depth += 1
+        moving.touch()
+        return self
+
+    def __exit__(self, *exc):
+        moving.depth -= 1
+        moving.touch()          # the cooldown starts from the last move, not the first
+        return False
+
+    @staticmethod
+    def touch():
+        try:
+            with open(MOVING, "w") as f:
+                f.write(str(os.getpid()))
+        except OSError:
+            pass
+
+    @staticmethod
+    def busy(grace=COOLDOWN):
+        try:
+            return time.time() - os.path.getmtime(MOVING) < grace
+        except OSError:
+            return False
+
+
 # ── Places ────────────────────────────────────────────────────────────────
 def find_place(token):
     """A planet by number, name prefix, or the role written on its name plate."""
@@ -257,6 +375,44 @@ def write_claims(st, claims):
         pass
 
 
+# Where each window sits in its district's grid. Window id was doing this job,
+# which meant the grid was fixed in the order things happened to open — fine
+# until you want the thing you are working on next to the thing you are
+# comparing it with. Anything sol has not been told about keeps its place by
+# id, so a district nobody has rearranged looks exactly as it always did.
+ORDER = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-order.json")
+
+
+def read_order():
+    try:
+        with open(ORDER) as f:
+            return {int(k): [int(i) for i in v] for k, v in json.load(f).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_order(st, order):
+    live = {w["id"] for w in real_windows(st)}
+    try:
+        with open(ORDER, "w") as f:
+            json.dump({str(k): [i for i in v if i in live]
+                       for k, v in order.items()}, f)
+    except OSError:
+        pass
+
+
+def in_order(n, wins):
+    """One district's windows, in the order its grid is meant to read.
+
+    Known windows first, in the order they were put there; anything new goes
+    on the end by id, which is the order it opened in.
+    """
+    want = read_order().get(n, [])
+    rank = {wid: i for i, wid in enumerate(want)}
+    return sorted(wins, key=lambda w: (rank.get(w["id"], len(rank) + w["id"]),
+                                       w["id"]))
+
+
 def assignment(st):
     """{place number: [windows]} — who holds what, worked out once."""
     if "sol_districts" in st:
@@ -274,8 +430,8 @@ def assignment(st):
             if dd > DISTRICT:
                 continue
         held.setdefault(place.n, []).append(w)
-    for wins in held.values():
-        wins.sort(key=lambda w: w["id"])
+    for n in held:
+        held[n] = in_order(n, held[n])
     st["sol_districts"] = held
     return held
 
@@ -380,33 +536,92 @@ def grid(place, wins, aspect):
     return slots, width, height
 
 
-def tidy(d, st, place, aspect):
-    """Lay a place's windows out in a grid and lift its name plate clear."""
+def tidy(d, st, place, aspect, plan=None):
+    """Lay a place's windows out in a grid and lift its name plate clear.
+
+    Past DECK windows the grid stops growing and the rest collapse into a
+    stack at its corner — see `stacks` for why the line is drawn there.
+
+    Collects its moves into `plan` rather than making them, when one is handed
+    in — so a caller tidying several places animates them as a single motion
+    instead of nine of them one after another.
+    """
     wins = district(st, place)
-    slots, _, height = grid(place, wins, aspect)
+    front, deck = wins[:DECK], wins[DECK:]
+    slots, width, height = grid(place, front, aspect)
     claims = read_claims()
-    for w, (x, y) in zip(wins, slots):
-        if [int(round(x)), int(round(y))] != list(w["position"]):
-            d.move(w["id"], x, y)
+    mine = [] if plan is None else plan
+    for w, (x, y) in zip(front, slots):
+        mine.append((w["id"], tuple(w["position"]), (x, y)))
         w["position"] = [int(round(x)), int(round(y))]
         claims[w["id"]] = place.n     # tidied here, so it belongs here
+
+    # The stack, off the block's bottom-right corner: each one a step further
+    # back than the last, so it reads as a pile rather than a pixel.
+    for i, w in enumerate(deck):
+        aw, ah = w["size"]
+        x = place.x + width / 2.0 + GAP + aw / 2.0 + i * DECK_STEP
+        y = place.y - height / 2.0 + ah / 2.0 - i * DECK_STEP
+        mine.append((w["id"], tuple(w["position"]), (x, y)))
+        w["position"] = [int(round(x)), int(round(y))]
+        claims[w["id"]] = place.n
     write_claims(st, claims)
 
     plate = plate_of(st, place)
     if plate:
         top = place.y + (height / 2.0 if wins else 0.0)
         y = top + PLATE_GAP + plate["size"][1] / 2.0 if wins else place.y + 400
-        if abs(y - plate["position"][1]) > 1 or plate["position"][0] != place.x:
-            d.move(plate["id"], place.x, y)
+        mine.append((plate["id"], tuple(plate["position"]), (place.x, y)))
         plate["position"] = [place.x, int(round(y))]
+    if plan is None:
+        glide(d, mine)
     return wins
+
+
+# ── When a planet fills right up ──────────────────────────────────────────
+# A district can only grow so far before framing it puts the windows below the
+# size at which they are any use, and driftwm's IPC has no resize — position,
+# opacity, focus and close are the whole toolkit — so shrinking them to fit is
+# not on the table. What is left is to stop laying all of them out.
+#
+# So the grid holds the DECK most recently used and the rest collapse into a
+# stack at its corner: still there, still counted, still reachable with
+# mod+n, but out of the way and visibly behind. Touch one and it comes back
+# to the front, which makes the grid an LRU you can see. The order that
+# `sol shift` and a drag-to-reorder write is the same order that decides
+# this, so recency and arrangement are one mechanism rather than two.
+DECK = 12          # how many a grid holds before the rest start stacking
+DECK_STEP = 26     # how far each one sits behind the one in front
+DECK_DIM = 0.45    # and how far back it reads
+
+
+def stacks(st):
+    """{window id: how deep in its planet's stack} for everything collapsed."""
+    deep = {}
+    for wins in assignment(st).values():
+        for i, w in enumerate(wins[DECK:]):
+            deep[w["id"]] = i
+    return deep
 
 
 def spotlight(d, st, focused=None):
     """Bring the focused window forward and set the rest a touch back."""
+    deep = stacks(st)
     for w in real_windows(st):
+        if w["id"] in deep:
+            d.opacity(w["id"], max(0.20, DECK_DIM - 0.04 * deep[w["id"]]))
+            continue
         lit = (w["id"] == focused) if focused is not None else w.get("is_focused")
         d.opacity(w["id"], 1.0 if lit else DIM)
+
+
+def promote(st, place, wid):
+    """Bring a window to the front of its grid — what touching one means."""
+    ids = [w["id"] for w in district(st, place) if w["id"] != wid]
+    order = read_order()
+    order[place.n] = [wid] + ids
+    write_order(st, order)
+    st.pop("sol_districts", None)
 
 
 # ── The card each district sits on ────────────────────────────────────────
@@ -551,8 +766,10 @@ def cmd_arrange(args):
         if not p:
             sys.exit("sol arrange: unknown place")
         places = [p]
+    plan = []
     for p in places:
-        tidy(d, st, p, ow / oh)
+        tidy(d, st, p, ow / oh, plan)
+    glide(d, plan)                    # every district settles as one motion
     spotlight(d, st)
     write_plates(st)
     write_cards(d, st)
@@ -564,6 +781,7 @@ def cmd_step(args, step=1):
     """Focus the next window of the place we are at, and fly to it."""
     d = Drift()
     st = d.state()
+    ow, oh = screen(st)
     x, y = d.camera()
     here, dist = nearest(x, y)
     wins = district(st, here)
@@ -575,6 +793,19 @@ def cmd_step(args, step=1):
         w = min(wins, key=lambda w: math.hypot(w["position"][0] - x, w["position"][1] - y))
     else:
         w = wins[(wins.index(cur) + step) % len(wins)]
+
+    # Stepping onto something in the stack lifts it back into the grid. Only
+    # then — stepping across the grid itself must not churn the order, or the
+    # next press would set off from somewhere you did not leave it.
+    if w["id"] in stacks(st):
+        promote(st, here, w["id"])
+        with moving():
+            plan = []
+            tidy(d, st, here, ow / oh, plan)
+            glide(d, plan)
+        write_cards(d, st)
+        w = next(q for q in district(st, here) if q["id"] == w["id"])
+
     d.focus(w["id"])
     spotlight(d, st, w["id"])
     fly(d, w["position"][0], w["position"][1], WORK_ZOOM)
@@ -594,21 +825,285 @@ def cmd_send(args):
     was = next((q for q in PLACES if win in district(st, q)), None)
     ow, oh = screen(st)
     # Land it on the planet, then tidy — so sending ten windows to one planet
-    # leaves a grid rather than ten windows on the same pixel.
+    # leaves a grid rather than ten windows on the same pixel. The landing is
+    # only the bookkeeping: `origin` is put back below so the window is seen
+    # to cross, on the arc it would really have taken.
+    origin = tuple(win["position"])
     d.move(win["id"], p.x, p.y)
     win["position"] = [p.x, p.y]
     claims = read_claims()
     claims[win["id"]] = p.n
     write_claims(st, claims)
     st.pop("sol_districts", None)          # it has a new home; work it out again
-    tidy(d, st, p, ow / oh)
+    plan = []
+    tidy(d, st, p, ow / oh, plan)
     if was and was.n != p.n:
-        tidy(d, st, was, ow / oh)          # and the district it left behind
+        tidy(d, st, was, ow / oh, plan)    # and the district it left behind
+    plan = [(w, origin if w == win["id"] else a, b) for w, a, b in plan]
+    glide(d, plan, arc=ARC if was and was.n != p.n else 0.0)
     spotlight(d, st)
     write_plates(st)
     write_cards(d, st)
     if "--stay" not in args:
         fly(d, *frame(st, p, (ow, oh)))
+
+
+# ── Catching a drag ───────────────────────────────────────────────────────
+# driftwm already lets you pick a window up and put it anywhere on the canvas.
+# What it cannot know is that Jupiter is a place. So `sol watch` subscribes to
+# the compositor's event stream, waits for a dragged window to come to rest,
+# and reads what the drop meant: another planet's district, a different slot
+# in the one it was already in, or open space.
+#
+# Sol's own moves arrive on the same stream and look exactly like a drag,
+# which is what the `moving` lock is for.
+SETTLE = 0.20          # nothing has moved for this long, so the drag is over
+
+
+class Stream:
+    """Raw line reader over an IPC socket.
+
+    Events arrive in bursts — a drag produces one a frame — so several land in
+    a single read. A buffered readline() would leave the extras invisible to
+    select(), which watches the descriptor and not Python's buffer: the same
+    trap the overview's keyboard fell into.
+    """
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.buf = b""
+
+    def take(self, timeout):
+        import select
+        if b"\n" not in self.buf:
+            r, _, _ = select.select([self.sock], [], [], timeout)
+            if not r:
+                return []
+            chunk = self.sock.recv(1 << 16)
+            if not chunk:
+                raise EOFError("driftwm closed the connection")
+            self.buf += chunk
+        parts = self.buf.split(b"\n")
+        self.buf = parts.pop()
+        out = []
+        for line in parts:
+            try:
+                got = json.loads(line.decode().strip() or "0")
+            except ValueError:
+                continue
+            if isinstance(got, dict) and got.get("State"):
+                out.append(got["State"])
+        return out
+
+
+def cmd_watch(args):
+    """Finish the journey for any window you drop somewhere new."""
+    act, ear = Drift(), Drift()
+    ear.f.write(b'"Subscribe"\n')
+    ear.f.flush()
+    ear.f.readline()                       # the Ok for the subscription itself
+    ear.s.settimeout(None)
+    stream = Stream(ear.s)
+
+    seen, adrift, lift, focused = {}, {}, set(), None
+    while True:
+        try:
+            states = stream.take(0.05)
+        except (EOFError, OSError):
+            return
+        now = time.time()
+        for st in states:
+            at_now = next((w["id"] for w in real_windows(st)
+                           if w.get("is_focused")), None)
+            if at_now is not None and at_now != focused:
+                focused = at_now
+                lift.add(at_now)           # if it was stacked, it comes forward
+            if moving.busy():
+                # sol is animating: take every position as read, and forget
+                # anything that looked like a drag while it was doing so.
+                seen = {w["id"]: (tuple(w["position"]), now)
+                        for w in real_windows(st)}
+                adrift.clear()
+                continue
+            for w in real_windows(st):
+                wid, at = w["id"], tuple(w["position"])
+                was = seen.get(wid)
+                if was is None or at != was[0]:
+                    seen[wid] = (at, now)
+                if was is not None and at != was[0]:
+                    adrift[wid] = at
+        if moving.busy():
+            continue
+        for wid in [k for k in list(adrift)
+                    if now - seen.get(k, (None, now))[1] >= SETTLE]:
+            adrift.pop(wid, None)
+            try:
+                settle(act, wid)
+            except Exception:              # a daemon that dies on one odd drop
+                pass                       # is worse than one that shrugs
+        while lift:
+            try:
+                raise_up(act, lift.pop())
+            except Exception:
+                pass
+
+
+def raise_up(d, wid):
+    """A stacked window has been touched: lift it back into the grid."""
+    st = d.state()
+    if wid not in stacks(st):
+        return
+    place = next((p for p in PLACES
+                  if any(w["id"] == wid for w in district(st, p))), None)
+    if not place:
+        return
+    ow, oh = screen(st)
+    promote(st, place, wid)
+    with moving():
+        plan = []
+        tidy(d, st, place, ow / oh, plan)
+        glide(d, plan)
+    spotlight(d, st, wid)
+    write_plates(st)
+    write_cards(d, st)
+
+
+def slot_for(place, wins, drop, aspect):
+    """The index of the grid slot nearest a point — where a drop belongs."""
+    slots, _, _ = grid(place, wins, aspect)
+    if not slots:
+        return 0
+    return min(range(len(slots)),
+               key=lambda i: math.hypot(slots[i][0] - drop[0],
+                                        slots[i][1] - drop[1]))
+
+
+def put_at(st, place, wid, index):
+    """Write down that this window holds this place in the grid's order."""
+    ids = [w["id"] for w in district(st, place) if w["id"] != wid]
+    ids.insert(max(0, min(index, len(ids))), wid)
+    order = read_order()
+    order[place.n] = ids
+    write_order(st, order)
+    st.pop("sol_districts", None)          # the order changed; work it out again
+
+
+def settle(d, wid):
+    """A window has been put down. Work out what that meant, and finish it."""
+    st = d.state()
+    w = next((q for q in real_windows(st) if q["id"] == wid), None)
+    if not w:
+        return
+    drop = tuple(w["position"])
+    ow, oh = screen(st)
+    aspect = ow / oh
+    claims = read_claims()
+    home = claims.get(wid)
+    was = PLACES[home] if home is not None and 0 <= home < len(PLACES) else None
+
+    # Did it leave? The card is the answer, not the nearest planet centre.
+    #
+    # Nearest alone gets this badly wrong, because a tidy district reaches
+    # past the halfway line to its neighbours: the left column of Earth's grid
+    # is genuinely nearer Venus than Earth. Deciding by centres would hand
+    # those windows to Venus the moment anything nudged them — which is
+    # exactly what it did, quietly, until a strip of counts in the bar gave it
+    # away. The card is the district you can see, so dropping anywhere on it
+    # means "put it here", and only leaving it means "it lives somewhere else
+    # now".
+    box = bounds(st, was) if was else None
+    stayed = box is not None and abs(drop[0] - box[0]) <= box[2] \
+        and abs(drop[1] - box[1]) <= box[3]
+
+    if stayed:
+        reorder(d, st, was, wid, drop, aspect)
+        return
+
+    place, dist = nearest(*drop)
+    if dist > DISTRICT:                    # left in open space: it is adrift
+        claims.pop(wid, None)
+        write_claims(st, claims)
+        if was:
+            with moving():
+                st.pop("sol_districts", None)
+                plan = []
+                tidy(d, st, was, aspect, plan)
+                glide(d, plan)
+            write_plates(st)
+            write_cards(d, st)
+        return
+
+    if was and was.n == place.n:
+        reorder(d, st, place, wid, drop, aspect)
+    else:
+        handoff(d, st, place, wid, drop, aspect, was)
+
+
+def reorder(d, st, place, wid, drop, aspect):
+    """Dropped inside its own district: give it the slot it was dropped on."""
+    wins = district(st, place)
+    if len(wins) < 2:
+        with moving():
+            glide(d, [(wid, drop, (w["position"][0], w["position"][1]))
+                      for w in wins if w["id"] == wid])
+        return
+    put_at(st, place, wid, slot_for(place, wins, drop, aspect))
+    with moving():
+        plan = []
+        tidy(d, st, place, aspect, plan)
+        glide(d, plan)
+    write_cards(d, st)
+
+
+def handoff(d, st, place, wid, drop, aspect, was):
+    """Dropped on another planet: make room first, then let it cross.
+
+    Two motions, in the order a room makes space for somebody. Everything
+    already there slides apart while the newcomer waits where it was put down,
+    and only then does it travel — on an arc away from the Sun, because what
+    it is doing is a transfer between two orbits and a transfer is not a
+    straight line. Behind it, the district it left closes the gap.
+    """
+    claims = read_claims()
+    claims[wid] = place.n
+    write_claims(st, claims)
+    st.pop("sol_districts", None)
+    put_at(st, place, wid, slot_for(place, district(st, place), drop, aspect))
+
+    with moving():
+        plan = []
+        tidy(d, st, place, aspect, plan)
+        if was and was.n != place.n:
+            tidy(d, st, was, aspect, plan)     # and the one it left behind
+        crossing = [m for m in plan if m[0] == wid]
+        glide(d, [m for m in plan if m[0] != wid])    # the room makes space
+        glide(d, crossing, arc=ARC)                   # then it crosses
+    spotlight(d, st)
+    write_plates(st)
+    write_cards(d, st)
+
+
+def cmd_shift(args, step=1):
+    """Move the focused window one slot along its district's grid."""
+    d = Drift()
+    st = d.state()
+    ow, oh = screen(st)
+    win = next((w for w in real_windows(st) if w.get("is_focused")), None)
+    if not win:
+        sys.exit("sol shift: no focused window")
+    place = next((p for p in PLACES if win in district(st, p)), None)
+    if not place:
+        sys.exit("sol shift: that window is not at a planet")
+    wins = district(st, place)
+    if len(wins) < 2:
+        return
+    i = [w["id"] for w in wins].index(win["id"])
+    put_at(st, place, win["id"], (i + step) % len(wins))
+    with moving():
+        plan = []
+        tidy(d, st, place, ow / oh, plan)
+        glide(d, plan)
+    write_cards(d, st)
 
 
 def whereabouts(st, cam, zoom):
@@ -647,9 +1142,14 @@ def windows_word(n):
 PLATES = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-plates")
 
 
+def held(n):
+    """How a count reads once some of it has stacked: "10 + 7"."""
+    return "%d + %d" % (DECK, n - DECK) if n > DECK else "%d" % n
+
+
 def plate_line(p, n):
-    """The line a planet's name plate shows: "3  E A R T H  home · 10"."""
-    tail = "%s · %d" % (p.role, n) if n else p.role
+    """The line a planet's name plate shows: "3  E A R T H  home · 10 + 7"."""
+    tail = "%s · %s" % (p.role, held(n)) if n else p.role
     return "  %d   %s   \033[2m%s\033[0m" % (p.n, " ".join(p.name.upper()), tail)
 
 
@@ -689,7 +1189,42 @@ def cmd_plate(args):
 # the plates — and it leaves the finished JSON in one file for the others to
 # read. `sol bar strip` is then a seek and a print: no IPC, no state, no cost.
 BAR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-bar")
-BAR_PARTS = ("where", "holding", "strip")
+BAR_PARTS = ("where", "holding", "strip", "last")
+
+# The footer's idle half: the last thing sol was asked to do. Every command
+# leaves its name here on the way out, whoever asked for it — a keybinding, the
+# menu, the command line itself — so the bottom of the screen is a record of
+# what just happened rather than a strip of wasted pixels. The ones that poll
+# say nothing, or the footer would only ever read "here".
+LOG = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-last")
+# `prompt` is quiet because it records the command you typed into it, and
+# main() must not then overwrite that with the word "prompt".
+QUIET = {"here", "bar", "plate", "list", "watch", "map", "help", "menu",
+         "prompt"}
+
+
+def note(argv):
+    if not argv or argv[0] in QUIET:
+        return
+    try:
+        with open(LOG, "w") as f:
+            f.write(" ".join(argv))
+    except OSError:
+        pass
+
+
+def last_run():
+    try:
+        with open(LOG) as f:
+            said = f.read().strip()
+        age = time.time() - os.path.getmtime(LOG)
+    except OSError:
+        return ""
+    if not said or age > 900:
+        return ""
+    when = ("just now" if age < 5 else "%ds ago" % int(age) if age < 90
+            else "%dm ago" % int(age / 60))
+    return "%s · %s" % (said, when)
 
 RING = "①②③④⑤⑥⑦⑧"          # a planet, as the key that flies you to it
 SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"          # its tally, small enough to read as a badge
@@ -728,13 +1263,18 @@ def write_bar(st, place, on_it, n, z):
     else:
         name, cls, role = place.name, place.name.lower(), place.role
 
-    holding = role if not n else "%s · %d" % (role, n)
-    tally = "  ".join("%d %s · %d" % (p.n, p.name, counts[p.n])
+    # The 12 + N split is a fact about one planet's grid, so it only reads
+    # that way when you are standing on one. "the system · 12 + 7" would be
+    # arithmetic about nothing.
+    count = held(n) if (place and on_it and place is not SUN) else "%d" % n
+    holding = role if not n else "%s · %s" % (role, count)
+    tally = "  ".join("%d %s · %s" % (p.n, p.name, held(counts[p.n]))
                       for p in PLANETS if counts.get(p.n)) or "nothing on the canvas"
     text = "\n".join(json.dumps(o) for o in (
         {"text": name, "class": cls, "tooltip": "%s — %d%%" % (role, int(z * 100))},
         {"text": holding, "class": cls, "tooltip": windows_word(n) if n else role},
         {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
+        {"text": last_run(), "class": "last", "tooltip": "what sol last did"},
     )) + "\n"
     try:
         with open(BAR) as f:
@@ -802,6 +1342,52 @@ def cmd_list(args):
         print("%-12s %-9s %d" % ("deep space", "adrift", stray))
     if not total:
         print("no windows on the canvas")
+
+
+def cmd_prompt(args):
+    """The footer's other half: type any sol command, with completion.
+
+    The bar along the bottom is a status line until you ask it a question.
+    This is what runs when you do — a real command line over the same CLI
+    everything else already goes through, so there is nothing here that the
+    keybindings can do and it cannot. A bare place name is taken as `goto`,
+    because "jupiter" is what you would type if nobody had told you a verb
+    was expected.
+    """
+    words = sorted(CMDS) + [p.name.lower() for p in PLACES] + \
+        [p.role for p in PLACES] + [str(p.n) for p in PLANETS]
+    try:
+        import readline
+
+        def complete(text, k):
+            hits = [w for w in words if w.startswith(text)]
+            return hits[k] if k < len(hits) else None
+
+        readline.set_completer(complete)
+        readline.parse_and_bind("tab: complete")
+    except Exception:
+        pass
+
+    sys.stdout.write("\033[?25h")
+    sys.stdout.flush()
+    try:
+        line = input("  \033[38;2;240;217;154m☉\033[0m \033[38;2;86;95;137m▸\033[0m ")
+    except (EOFError, KeyboardInterrupt):
+        return
+    argv = line.split()
+    if not argv:
+        return
+    fn = CMDS.get(argv[0])
+    if fn is None and find_place(argv[0]):
+        argv = ["goto"] + argv                 # "jupiter" means go to Jupiter
+        fn = CMDS["goto"]
+    if fn is None:
+        sys.stdout.write("  \033[38;2;247;118;142mno such command: %s\033[0m\n" % argv[0])
+        sys.stdout.flush()
+        time.sleep(1.4)
+        return
+    fn(argv[1:])
+    note(argv)
 
 
 def cmd_menu(args):
@@ -1331,6 +1917,8 @@ def dive(d, st, w):
 CMDS = {"goto": cmd_goto, "hop": cmd_hop, "system": cmd_system, "send": cmd_send,
         "here": cmd_here, "menu": cmd_menu, "map": cmd_map, "help": cmd_help,
         "arrange": cmd_arrange, "list": cmd_list, "plate": cmd_plate, "bar": cmd_bar,
+        "watch": cmd_watch, "prompt": cmd_prompt,
+        "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 
 
@@ -1349,6 +1937,7 @@ def main():
     if not fn:
         sys.exit("sol: unknown command '%s' (try: %s)" % (cmd, ", ".join(sorted(CMDS))))
     fn(sys.argv[2:])
+    note(sys.argv[1:])       # the footer says what just happened
 
 
 if __name__ == "__main__":

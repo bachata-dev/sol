@@ -9,6 +9,7 @@
 #   mod+tab   fly-to menu            mod+/  the keybinding card
 #   mod+a     tidy this planet       mod+n/p  step through its windows
 #   mod+e     the overview           (the whole system, named, on demand)
+#   drag a window to another planet and it flies itself into that grid
 #
 # THE RULE THIS FILE ENFORCES: the camera moves only when you ask it to.
 # Every automatic camera move driftwm offers is switched off below, and all
@@ -20,7 +21,11 @@ window_placement = "cursor"
 
 autostart = [
   "waybar -c ~/.config/driftwm/waybar.jsonc -s ~/.config/driftwm/waybar.css",
+  # the footer: what sol last did, and the command line you can open over it
+  "waybar -c ~/.config/driftwm/waybar-footer.jsonc -s ~/.config/driftwm/waybar.css",
   "mako",
+  # catches windows you drag from one planet to another
+  "sol watch",
   # planet name plates
   "foot -a planet-label-1 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
   "foot -a planet-label-2 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e0af68 -e sh ~/.config/driftwm/label.sh 2 VENUS comms",
@@ -103,6 +108,7 @@ animate_fps = 30
 "mod+tab" = "spawn sol menu"
 "mod+slash" = "spawn sol-help"
 "mod+e" = "spawn sol-map"          # the overview: everything, named, on demand
+"mod+semicolon" = "spawn sol-cmd"  # the command line, in the footer
 
 # ── a crowded planet ──
 # mod+a tidies the windows of wherever you are into a grid; mod+n / mod+p
@@ -110,6 +116,9 @@ animate_fps = 30
 "mod+a" = "spawn sol arrange"
 "mod+n" = "spawn sol next"
 "mod+p" = "spawn sol prev"
+# and move the focused window along the grid it is in
+"mod+shift+left" = "spawn sol shift back"
+"mod+shift+right" = "spawn sol shift forward"
 
 # ── carry ──
 "mod+ctrl+1" = "spawn sol send 1"
@@ -231,6 +240,19 @@ border_width = 1
 border_color = "#414868"
 border_color_focused = "#414868"
 corner_radius = 14
+
+# The command line, sitting just above the footer it belongs to.
+[[window_rules]]
+app_id = "sol-cmd"
+pinned_to_screen = true
+position = [0, -455]
+size = [1500, 46]
+decoration = "minimal"
+blur = true
+corner_radius = 10
+border_width = 1
+border_color = "#7aa2f7"
+border_color_focused = "#7aa2f7"
 
 # The keybinding card, centred and pinned while it is open
 [[window_rules]]
