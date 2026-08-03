@@ -283,6 +283,12 @@ border_width = 1
 border_color = "#414868"
 border_color_focused = "#414868"
 shadow = true
+# Born invisible. driftwm centres a new window on the cursor and sol then
+# moves it beside the cursor instead — an animated move, so you would watch
+# the menu slide out from under your pointer every time. It travels at zero
+# opacity and fades in once it has arrived, which is how a menu should
+# appear anyway.
+opacity = 0.0
 
 # The command line, sitting just above the footer it belongs to.
 [[window_rules]]

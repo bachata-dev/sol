@@ -244,6 +244,11 @@ sol reads that centre back (it is where you clicked) and moves the menu so its c
 instead. It waits for the window to be configured before doing so: a window exists at 0×0 for a
 moment before it is placed, and moving it in that gap moves nothing at all.
 
+That move is animated, which would mean watching the menu slide out from under your pointer every
+time you opened it. So it is **born invisible** — `opacity = 0.0` in its window rule — travels while
+nothing can see it, and fades in over a tenth of a second once it has arrived. What you see is a
+menu appearing beside the cursor, which is all you should ever have seen.
+
 ![the menu](screenshots/menu.png)
 
 **The footer** is the same bar upside down. The header says where you are; this one says what sol

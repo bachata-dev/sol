@@ -1557,36 +1557,65 @@ def place_at_pointer(d, tries=120):
     the placement that follows overwrites it. So this waits for a size, and
     then for a position that has stopped changing.
     """
-    seen = None
-    for _ in range(tries):
-        time.sleep(0.02)
+    wid, seen = None, None
+    try:
+        for _ in range(tries):
+            time.sleep(0.02)
+            st = d.state()
+            me = next((w for w in st.get("windows", [])
+                       if w.get("app_id") == "sol-menu"), None)
+            if not me or me["size"][0] <= 0 or me["size"][1] <= 0:
+                continue
+            wid = me["id"]
+            at = tuple(me["position"])
+            if at != seen:        # still being placed; wait for it to settle
+                seen = at
+                continue
+
+            ow, oh = screen(st)
+            out = st["outputs"][0]
+            cx, cy = out["camera"]
+            z = out["zoom"] or 1.0
+            (wx, wy), (sw, sh) = me["position"], me["size"]
+            w, h = sw * z, sh * z
+            px = ow / 2.0 + (wx - cx) * z      # the pointer: where it centred
+            py = oh / 2.0 - (wy - cy) * z
+            gap = 2.0
+            left = px + gap if px + gap + w <= ow - 8 else px - gap - w
+            top = py + gap if py + gap + h <= oh - 34 else py - gap - h
+            left = max(8.0, min(left, ow - 8 - w))
+            top = max(36.0, min(top, oh - 34 - h))
+            d.move(me["id"],
+                   cx + (left + w / 2.0 - ow / 2.0) / z,
+                   cy - (top + h / 2.0 - oh / 2.0) / z)
+            # Let the (invisible) move all but finish. driftwm eases window
+            # moves, so the last few percent arrive during the fade, where
+            # nothing is solid enough yet to read as movement.
+            time.sleep(0.10)
+            break
+    finally:
+        # Whatever happened above, the menu must not be left invisible.
+        reveal(d, wid)
+
+
+def reveal(d, wid, ms=100, steps=10):
+    """Fade the menu in where it landed, rather than let it slide into view.
+
+    Eased rather than linear: a menu that arrives at a constant rate reads
+    as a light being turned up, and one that arrives quickly and settles
+    reads as a menu.
+    """
+    if wid is None:
         st = d.state()
         me = next((w for w in st.get("windows", [])
                    if w.get("app_id") == "sol-menu"), None)
-        if not me or me["size"][0] <= 0 or me["size"][1] <= 0:
-            continue
-        at = tuple(me["position"])
-        if at != seen:            # still being placed; wait for it to settle
-            seen = at
-            continue
-
-        ow, oh = screen(st)
-        out = st["outputs"][0]
-        cx, cy = out["camera"]
-        z = out["zoom"] or 1.0
-        (wx, wy), (sw, sh) = me["position"], me["size"]
-        w, h = sw * z, sh * z
-        px = ow / 2.0 + (wx - cx) * z          # the pointer: where it centred
-        py = oh / 2.0 - (wy - cy) * z
-        gap = 2.0
-        left = px + gap if px + gap + w <= ow - 8 else px - gap - w
-        top = py + gap if py + gap + h <= oh - 34 else py - gap - h
-        left = max(8.0, min(left, ow - 8 - w))
-        top = max(36.0, min(top, oh - 34 - h))
-        d.move(me["id"],
-               cx + (left + w / 2.0 - ow / 2.0) / z,
-               cy - (top + h / 2.0 - oh / 2.0) / z)
-        return
+        if not me:
+            return
+        wid = me["id"]
+    for i in range(1, steps + 1):
+        t = i / float(steps)
+        d.opacity(wid, math.sin(t * math.pi / 2.0))     # ease out
+        time.sleep(ms / 1000.0 / steps)
 
 
 def menu_draw():
