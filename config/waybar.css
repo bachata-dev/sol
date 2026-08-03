@@ -54,12 +54,25 @@ window#waybar {
 #custom-where.system  { color: #bb9af7; }
 #custom-where.space   { color: #565f89; font-weight: 500; }
 
-/* ── centre: the strip ───────────────────────────────────────────────── */
-/* It brings its own colours in pango markup, so all this owes it is room. */
-#custom-strip {
+/* ── centre: the strip, as eight buttons ─────────────────────────────── */
+/* Each planet is its own module so each is its own click target — the
+   workspace-button muscle memory. The chips bring their own colours in
+   pango markup; this only gives them room and a hover, so they read as
+   the buttons they are. */
+#custom-p1, #custom-p2, #custom-p3, #custom-p4,
+#custom-p5, #custom-p6, #custom-p7, #custom-p8 {
   font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
   font-size: 13px;
-  padding: 0 12px;
+  padding: 0 6px;
+}
+#custom-p1:hover, #custom-p2:hover, #custom-p3:hover, #custom-p4:hover,
+#custom-p5:hover, #custom-p6:hover, #custom-p7:hover, #custom-p8:hover {
+  background: rgba(192, 202, 245, 0.10);
+}
+#custom-belt {
+  color: #2a2f45;
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  padding: 0 4px;
 }
 
 /* ── right: status, quiet and evenly spaced ──────────────────────────── */

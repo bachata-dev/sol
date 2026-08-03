@@ -87,14 +87,24 @@ desktops. Three fingers still pan and two still zoom, so nothing you already do 
 | pinch in / out | pull back to the system · drop into where you are |
 | four-finger hold | tidy this planet |
 
-On a mouse, the clicks follow the muscle memory they borrow from. **Right-click the sky** opens the
-`☉` menu as a context menu — where you are and what you would do to it first, then everywhere else —
-because right-click has meant "a menu about what is here" for as long as there have been desktops.
-**Middle-click the sky** opens the overview, which is the window list, which is what middle-click on
-the root has meant since X11 had root menus. And on a window sol binds no plain clicks at all:
-middle-click is paste, and it stays paste. driftwm has no double-click trigger, so "double-click a
-planet to go there" is one habit the canvas cannot borrow — clicking a window from far out flies you
-to it, which covers the same instinct.
+On a mouse, every click borrows a habit you already have, and does what that habit expects:
+
+- **The numbers in the bar are buttons.** Click `③` and you are on Earth — the same gesture as
+  clicking a workspace number in any bar since i3. This is where "click to switch" has always
+  lived, so it is the only place a plain click means travel.
+- **Right-click the sky acts on what is here**, as right-click has since desktops began: tidy this
+  planet, step through its windows, *new terminal here* — the oldest right-click item there is, and
+  since new windows land under the cursor, "here" is exactly where you clicked. Travel sits behind
+  one labelled door, "Go to a planet…", instead of being what the menu is.
+- **Middle-click the sky opens the overview** — middle-on-the-root has meant the window list since
+  X11 had root menus, and the overview is the window list.
+- **On a window, sol binds nothing without a modifier.** Middle-click is paste and stays paste;
+  `alt+left` moves and `alt+right` resizes, as they do on every Linux desktop.
+- **From far out, clicking a window flies you to it** — direct manipulation: touch the thing you
+  are looking at.
+
+driftwm has no double-click trigger, so "double-click a planet to go there" is one habit the canvas
+cannot borrow; the bar's buttons and click-to-fly cover the same instinct.
 
 ## When a planet fills up
 
@@ -202,16 +212,19 @@ menus. Status sits on the right, monochrome and quiet, then Control Centre, then
 In the middle is **the strip**: all eight planets at once, `①②③④ ┊ ⑤⑥⑦⑧`, each in its own colour with
 a small tally, dim when empty, underlined where you are. It is ordinal rather than spatial on
 purpose — nobody flies by angle, they fly by number — and the belt keeps its place in the middle as
-the divide it is. Scroll it to travel sunward and outward, the way you scroll a volume icon.
+the divide it is. **Each number is a button**: click it and you are there, exactly as a workspace
+number has worked in every bar since i3. Scroll anywhere on the strip to travel sunward and outward,
+the way you scroll a volume icon.
 
 Only one module in the bar ever asks driftwm anything. `sol here` runs once a second, and leaves the
 other modules' answers in a file for them to read, so eight planets' worth of tally costs one query.
 
 ![the bar](screenshots/bar.png)
 
-**The `☉` menu** is what the sun at the far left opens, what `mod+tab` brings up, and what
-right-clicking the sky means: a context menu for wherever you are standing — this place and its
-actions first, then everywhere else with what each is holding.
+**The `☉` menu** is what the sun at the far left opens and what right-clicking the sky means: a
+context menu for wherever you are standing — tidy it, step through it, open a terminal here — with
+travel behind one labelled "Go to a planet…" item. `mod+tab` skips straight to that switcher:
+every place, what it holds, type to filter.
 
 ![the menu](screenshots/menu.png)
 

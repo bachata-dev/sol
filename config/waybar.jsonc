@@ -18,7 +18,9 @@
   "position": "top",
   "height": 28,
   "modules-left": ["custom/sol", "custom/where", "custom/holding"],
-  "modules-center": ["custom/strip"],
+  "modules-center": ["custom/p1", "custom/p2", "custom/p3", "custom/p4",
+                     "custom/belt",
+                     "custom/p5", "custom/p6", "custom/p7", "custom/p8"],
   "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray", "custom/overview", "clock"],
 
   "custom/sol": {
@@ -43,16 +45,28 @@
     "on-click-right": "sol-map"
   },
 
-  // Scroll it to travel sunward and outward, the way you scroll a volume icon.
-  "custom/strip": {
-    "exec": "sol bar strip",
-    "return-type": "json",
-    "interval": 1,
-    "on-click": "sol-map",
-    "on-click-right": "sol menu",
-    "on-scroll-up": "sol hop in",
-    "on-scroll-down": "sol hop out"
-  },
+  // The strip is eight buttons, not one readout — because the muscle memory
+  // for "click a number, be on that workspace" lives in the bar, and nowhere
+  // else. Each chip reads its line straight out of the file `sol here`
+  // leaves behind (a sed, not an interpreter), flies you there on click, and
+  // still hops sunward / outward under the scroll wheel.
+  "custom/p1": { "exec": "sed -n 5p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 1", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p2": { "exec": "sed -n 6p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 2", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p3": { "exec": "sed -n 7p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 3", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p4": { "exec": "sed -n 8p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 4", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/belt": { "format": "┊", "tooltip": false },
+  "custom/p5": { "exec": "sed -n 9p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 5", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p6": { "exec": "sed -n 10p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 6", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p7": { "exec": "sed -n 11p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 7", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
+  "custom/p8": { "exec": "sed -n 12p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+                 "on-click": "sol goto 8", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
 
   "custom/overview": {
     "format": "▦",

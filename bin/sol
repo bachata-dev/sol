@@ -1208,7 +1208,12 @@ def cmd_plate(args):
 # the plates — and it leaves the finished JSON in one file for the others to
 # read. `sol bar strip` is then a seek and a print: no IPC, no state, no cost.
 BAR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-bar")
-BAR_PARTS = ("where", "holding", "strip", "last")
+# where/holding/strip/last first, then one line per planet — the bar's strip
+# is eight separate buttons now, because the muscle memory for "click a
+# number, go to that workspace" lives in the bar and nowhere else, and a
+# single waybar module cannot know which number you clicked.
+BAR_PARTS = ("where", "holding", "strip", "last",
+             "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8")
 
 # The footer's idle half: the last thing sol was asked to do. Every command
 # leaves its name here on the way out, whoever asked for it — a keybinding, the
@@ -1250,6 +1255,15 @@ SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"          # its tally, small enough to read a
 DIMC = "#3b4261"            # an empty planet: present, but not asking for you
 
 
+def chip(p, n, here):
+    """One planet, as a bar segment: its ring, its tally, its colour."""
+    badge = "".join(SUP[int(c)] for c in str(n)) if n else ""
+    colour = p.colour if (n or p is here) else DIMC
+    mark = ' underline="single" underline_color="%s"' % p.colour if p is here else ""
+    return '<span foreground="%s"%s>%s%s</span>' % (colour, mark,
+                                                    RING[p.n - 1], badge)
+
+
 def strip_markup(counts, here):
     """The eight planets as one line: where you are, and who is holding what.
 
@@ -1261,12 +1275,7 @@ def strip_markup(counts, here):
     """
     out = []
     for p in PLANETS:
-        n = counts.get(p.n, 0)
-        badge = "".join(SUP[int(c)] for c in str(n)) if n else ""
-        colour = p.colour if (n or p is here) else DIMC
-        mark = ' underline="single" underline_color="%s"' % p.colour if p is here else ""
-        out.append('<span foreground="%s"%s>%s%s</span>'
-                   % (colour, mark, RING[p.n - 1], badge))
+        out.append(chip(p, counts.get(p.n, 0), here))
         if p.n == 4:
             out.append('<span foreground="#2a2f45">┊</span>')
     return "  ".join(out)
@@ -1289,12 +1298,18 @@ def write_bar(st, place, on_it, n, z):
     holding = role if not n else "%s · %s" % (role, count)
     tally = "  ".join("%d %s · %s" % (p.n, p.name, held(counts[p.n]))
                       for p in PLANETS if counts.get(p.n)) or "nothing on the canvas"
-    text = "\n".join(json.dumps(o) for o in (
+    lines = [
         {"text": name, "class": cls, "tooltip": "%s — %d%%" % (role, int(z * 100))},
         {"text": holding, "class": cls, "tooltip": windows_word(n) if n else role},
         {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
         {"text": last_run(), "class": "last", "tooltip": "what sol last did"},
-    )) + "\n"
+    ]
+    for p in PLANETS:
+        c = counts.get(p.n, 0)
+        lines.append({"text": chip(p, c, here), "class": "chip",
+                      "tooltip": "%d %s — %s%s" % (p.n, p.name, p.role,
+                                                   " · %d" % c if c else "")})
+    text = "\n".join(json.dumps(o) for o in lines) + "\n"
     try:
         with open(BAR) as f:
             if f.read() == text:
@@ -1409,18 +1424,53 @@ def cmd_prompt(args):
     note(argv)
 
 
-def cmd_menu(args):
-    """The ☉ menu — a context menu for the place you are standing.
+def _pick(items):
+    import subprocess
+    cmd = ["fuzzel", "--dmenu", "--lines", str(len(items))]
+    if os.path.exists(FUZZEL):        # ours if it is there, yours if it is not
+        cmd += ["--config", FUZZEL]
+    try:
+        return subprocess.run(cmd, input="\n".join(items), text=True,
+                              capture_output=True).stdout.strip()
+    except FileNotFoundError:
+        sys.exit("sol menu: fuzzel not installed")
 
-    Right-click has meant "a menu about what is here" for as long as there
-    have been desktops, so that is what this is: where you are at the top
-    with the things you would do to it, and only then the other places to
-    go. A plain list of eight destinations reads as teleportation — the
-    muscle memory it should borrow is the context menu's, not the portal's.
+
+def menu_go():
+    """The switcher: every place, what it holds, type to filter.
+
+    This is mod+tab's menu, and an item inside the context menu — but never
+    the whole of what right-click means, because a right-click that
+    teleports confounds the one habit every desktop shares.
     """
+    counts = census(Drift().state())
+    items = ["☉  Sun — home base"]
+    for p in PLANETS:
+        c = counts.get(p.n, 0)
+        items.append("%d  %s — %s%s" % (p.n, p.name, p.role,
+                                        "  ·  %d" % c if c else ""))
+    out = _pick(items)
+    if not out:
+        return
+    cmd_goto(["sun" if out.startswith("☉") else out.split()[0]])
+
+
+def cmd_menu(args):
+    """The ☉ menu — a context menu, in the oldest sense.
+
+    Right-click has meant "act on what is here" for as long as there have
+    been desktops, and never "take me somewhere else" — so this menu is the
+    things you would do to the place you are standing, with travel behind
+    one labelled door ("Go to a planet…") rather than spread across eight
+    unlabelled ones. "New terminal here" is here because it is the single
+    most familiar thing a desktop's right-click has ever offered — and
+    because new windows land under the cursor, "here" is exactly where you
+    clicked.
+    """
+    if args and args[0] == "go":
+        return menu_go()
     d = Drift()
     st = d.state()
-    counts = census(st)
     place, on_it, n = whereabouts(st, d.camera(), d.zoom())
     here = place if on_it and place is not None else None
 
@@ -1433,44 +1483,33 @@ def cmd_menu(args):
                                       "  ·  %d" % n if n else "")]
     if here is not None and n:
         items += ["─  Tidy this planet", "─  Step through its windows"]
-    items += ["─  Overview", "─  Whole system", "─  Keybindings"]
-    for p in PLACES:
-        if here is not None and p.n == here.n:
-            continue
-        c = counts.get(p.n, 0)
-        head = "☉" if p is SUN else str(p.n)
-        items.append("%s  %s — %s%s" % (head, p.name, p.role,
-                                        "  ·  %d" % c if c else ""))
+    items += ["─  New terminal here", "─  Go to a planet…",
+              "─  Overview", "─  Whole system", "─  Keybindings"]
 
-    import subprocess
-    cmd = ["fuzzel", "--dmenu", "--lines", str(len(items))]
-    if os.path.exists(FUZZEL):        # ours if it is there, yours if it is not
-        cmd += ["--config", FUZZEL]
-    try:
-        out = subprocess.run(cmd, input="\n".join(items), text=True,
-                             capture_output=True).stdout.strip()
-    except FileNotFoundError:
-        sys.exit("sol menu: fuzzel not installed")
+    out = _pick(items)
     if not out:
         return
+    import subprocess
     tail = out.split(None, 1)[-1].strip()
     if out.startswith("▸"):
         if here is None:
             cmd_system([])
         else:
             cmd_goto(["sun" if here is SUN else str(here.n)])
-    elif out.startswith("☉"):
-        cmd_goto(["sun"])
-    elif not out.startswith("─"):
-        cmd_goto([out.split()[0]])
-    elif tail == "Overview":
-        subprocess.Popen(["sol-map"], start_new_session=True)
-    elif tail == "Whole system":
-        cmd_system([])
     elif tail == "Tidy this planet":
         cmd_arrange([])
     elif tail == "Step through its windows":
         cmd_step([], 1)
+    elif tail == "New terminal here":
+        subprocess.Popen(["foot", "-c",
+                          os.path.expanduser("~/.config/driftwm/foot.ini")],
+                         start_new_session=True)
+    elif tail == "Go to a planet…":
+        menu_go()
+    elif tail == "Overview":
+        subprocess.Popen(["sol-map"], start_new_session=True)
+    elif tail == "Whole system":
+        cmd_system([])
     elif tail == "Keybindings":
         subprocess.Popen(["sol-help"], start_new_session=True)
 
@@ -1503,7 +1542,8 @@ HELP = """
    mod+; opens the command line in the footer. Drag a window onto another
    planet and it flies itself into that planet's grid.
 
-   THE MOUSE          right-click the sky   menu of where you are
+   THE MOUSE          a number in the bar   click it, you are there
+                      right-click the sky   this place: tidy · terminal · go
                       middle-click the sky  the overview · wheel  zoom
 
    FOUR FINGERS       swipe ←/→  next planet outward / sunward
