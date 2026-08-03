@@ -95,7 +95,9 @@ On a mouse, every click borrows a habit you already have, and does what that hab
 - **Right-click the sky acts on what is here**, as right-click has since desktops began: tidy this
   planet, step through its windows, *new terminal here* — the oldest right-click item there is, and
   since new windows land under the cursor, "here" is exactly where you clicked. Travel sits behind
-  one labelled door, "Go to a planet…", instead of being what the menu is.
+  one labelled door, "Go to a planet…", instead of being what the menu is. It **opens under the
+  pointer**, **flips up or left** rather than hang off an edge, and **closes when you click away** —
+  the three things that make a context menu one, and the three a launcher cannot do.
 - **Middle-click the sky opens the overview** — middle-on-the-root has meant the window list since
   X11 had root menus, and the overview is the window list.
 - **On a window, sol binds nothing without a modifier.** Middle-click is paste and stays paste;
@@ -225,6 +227,15 @@ other modules' answers in a file for them to read, so eight planets' worth of ta
 context menu for wherever you are standing — tidy it, step through it, open a terminal here — with
 travel behind one labelled "Go to a planet…" item. `mod+tab` skips straight to that switcher:
 every place, what it holds, type to filter.
+
+The context menu is a window of sol's own rather than a launcher, because a launcher cannot behave
+like a menu: it opens in the middle of the screen and holds an exclusive keyboard grab, so only
+`esc` ever closes it. This one opens with its corner at the pointer — driftwm places a new window's
+top-left at the cursor, which is exactly where a menu belongs — flips up or left when it would hang
+off an edge, and closes the moment focus goes elsewhere, which is what clicking away produces. It is
+a canvas window, so it is drawn at whatever zoom you are at; its size and font are divided by that
+zoom, and the same menu lands on screen whether you are at working zoom or looking at the whole
+system.
 
 ![the menu](screenshots/menu.png)
 

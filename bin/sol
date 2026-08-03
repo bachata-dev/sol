@@ -74,6 +74,7 @@ DIM = 0.90             # unfocused windows, so the focused one stands forward
 CARD_PAD = 70          # margin of the card a district sits on
 SHADER = os.path.expanduser("~/.config/driftwm/sol.glsl")
 FUZZEL = os.path.expanduser("~/.config/driftwm/fuzzel.ini")
+FOOT_INI = os.path.expanduser("~/.config/driftwm/foot.ini")
 
 
 # ── IPC ───────────────────────────────────────────────────────────────────
@@ -1424,9 +1425,10 @@ def cmd_prompt(args):
     note(argv)
 
 
-def _pick(items):
+def _pick(items, lines=None):
+    """fuzzel, for the switcher — a launcher's job, done by a launcher."""
     import subprocess
-    cmd = ["fuzzel", "--dmenu", "--lines", str(len(items))]
+    cmd = ["fuzzel", "--dmenu", "--lines", str(lines or len(items))]
     if os.path.exists(FUZZEL):        # ours if it is there, yours if it is not
         cmd += ["--config", FUZZEL]
     try:
@@ -1439,9 +1441,9 @@ def _pick(items):
 def menu_go():
     """The switcher: every place, what it holds, type to filter.
 
-    This is mod+tab's menu, and an item inside the context menu — but never
-    the whole of what right-click means, because a right-click that
-    teleports confounds the one habit every desktop shares.
+    Centred and modal on purpose — this is alt-tab's job, and alt-tab has
+    always appeared in the middle of the screen. It is the context menu that
+    must arrive under the pointer, not this.
     """
     counts = census(Drift().state())
     items = ["☉  Sun — home base"]
@@ -1450,68 +1452,247 @@ def menu_go():
         items.append("%d  %s — %s%s" % (p.n, p.name, p.role,
                                         "  ·  %d" % c if c else ""))
     out = _pick(items)
-    if not out:
-        return
-    cmd_goto(["sun" if out.startswith("☉") else out.split()[0]])
+    if out:
+        cmd_goto(["sun" if out.startswith("☉") else out.split()[0]])
+
+
+# ── The context menu ──────────────────────────────────────────────────────
+# A context menu has to do two things that a launcher will not: open under
+# the pointer, and close when you click away from it. fuzzel does neither —
+# it is centred by design and holds an exclusive keyboard grab, so only Esc
+# ever dismissed it. That is the whole of what was wrong.
+#
+# So the menu is a window of sol's own. driftwm places a new window's
+# top-left at the cursor, which is exactly where a menu belongs — but only
+# for canvas windows: pinning a window centres it, and a pinned window
+# cannot be moved afterwards. A canvas window is therefore the only kind
+# that can appear where you clicked, and a canvas window is drawn at the
+# zoom you are at. So the size and the font are divided by that zoom, and
+# what lands on screen is the same menu at every altitude.
+# foot renders JetBrains Mono at about 0.60 em wide and 1.31 em tall, and a
+# point is 4/3 of a pixel at 96dpi — the missing 4/3 is what wrapped the
+# first draft's header onto a second line and scrolled the title away.
+MENU_FONT = 11.0
+CELL_W = MENU_FONT * 4.0 / 3.0 * 0.60
+CELL_H = MENU_FONT * 4.0 / 3.0 * 1.31
+MENU_PAD = 8
+
+
+def menu_items(st, d):
+    """What the menu offers, and what each thing does."""
+    place, on_it, n = whereabouts(st, d.camera(), d.zoom())
+    here = place if on_it and place is not None else None
+    out = []
+    if here is None:
+        out.append(("the system — all eight planets", "head", ["system"]))
+    else:
+        label = ("Sun — home base" if here is SUN else
+                 "%d %s — %s%s" % (here.n, here.name, here.role,
+                                   "  ·  %d" % n if n else ""))
+        out.append((label, "head", ["goto", "sun" if here is SUN else str(here.n)]))
+    if here is not None and n:
+        out.append(("Tidy this planet", "act", ["arrange"]))
+        out.append(("Step through its windows", "act", ["next"]))
+    out.append(("New terminal here", "act", ["--terminal"]))
+    out.append(("Go to a planet…", "act", ["menu", "go"]))
+    out.append(("Overview", "act", ["--map"]))
+    out.append(("Whole system", "act", ["system"]))
+    out.append(("Keybindings", "act", ["--help-card"]))
+    return out, here
 
 
 def cmd_menu(args):
-    """The ☉ menu — a context menu, in the oldest sense.
-
-    Right-click has meant "act on what is here" for as long as there have
-    been desktops, and never "take me somewhere else" — so this menu is the
-    things you would do to the place you are standing, with travel behind
-    one labelled door ("Go to a planet…") rather than spread across eight
-    unlabelled ones. "New terminal here" is here because it is the single
-    most familiar thing a desktop's right-click has ever offered — and
-    because new windows land under the cursor, "here" is exactly where you
-    clicked.
-    """
+    """Open the context menu under the pointer — or, with `go`, the switcher."""
     if args and args[0] == "go":
         return menu_go()
+    if args and args[0] == "draw":
+        return menu_draw()
+
     d = Drift()
     st = d.state()
-    place, on_it, n = whereabouts(st, d.camera(), d.zoom())
-    here = place if on_it and place is not None else None
-
-    if here is None:
-        items = ["▸  the system — all eight planets"]
-    elif here is SUN:
-        items = ["▸  Sun — home base"]
-    else:
-        items = ["▸  %d %s — %s%s" % (here.n, here.name, here.role,
-                                      "  ·  %d" % n if n else "")]
-    if here is not None and n:
-        items += ["─  Tidy this planet", "─  Step through its windows"]
-    items += ["─  New terminal here", "─  Go to a planet…",
-              "─  Overview", "─  Whole system", "─  Keybindings"]
-
-    out = _pick(items)
-    if not out:
-        return
+    items, _ = menu_items(st, d)
+    z = max(0.02, d.zoom())
+    cols = max(len(label) for label, _, _ in items) + 5
+    rows = len(items) + 2                  # the rule under the heading, and a
+                                           # spare so the last line cannot
+                                           # scroll the first one away
+    # Divide by the zoom, so what lands on screen is the same size every time.
+    w = int((cols * CELL_W + 2 * MENU_PAD) / z)
+    h = int((rows * CELL_H + 2 * MENU_PAD) / z)
     import subprocess
-    tail = out.split(None, 1)[-1].strip()
-    if out.startswith("▸"):
-        if here is None:
-            cmd_system([])
+    subprocess.Popen(
+        ["foot", "-a", "sol-menu",
+         "--window-size-pixels=%dx%d" % (w, h),
+         "--font=JetBrains Mono:size=%.1f" % (MENU_FONT / z),
+         "-o", "colors.alpha=0.96", "-o", "colors.background=16161e",
+         "-o", "main.pad=%dx%d" % (MENU_PAD, MENU_PAD),
+         "-e", "sol", "menu", "draw"],
+        start_new_session=True)
+    keep_on_screen(d)
+
+
+def keep_on_screen(d, tries=24):
+    """Flip the menu back inside the screen, the way every menu does.
+
+    driftwm puts the window's top-left at the pointer, which is right until
+    you click near an edge and the menu hangs off it. A menu that would fall
+    off the bottom opens upwards instead, and one that would fall off the
+    right opens leftwards — so the corner you clicked in decides which way it
+    unfolds, and it is always wholly visible.
+    """
+    for _ in range(tries):
+        time.sleep(0.05)
+        st = d.state()
+        me = next((w for w in st.get("windows", [])
+                   if w.get("app_id") == "sol-menu"), None)
+        if not me:
+            continue
+        ow, oh = screen(st)
+        out = st["outputs"][0]
+        cx, cy = out["camera"]
+        z = out["zoom"] or 1.0
+        (wx, wy), (sw, sh) = me["position"], me["size"]
+        hw, hh = sw * z / 2.0, sh * z / 2.0
+        sx = ow / 2.0 + (wx - cx) * z
+        sy = oh / 2.0 - (wy - cy) * z
+        dx = dy = 0.0
+        if sy + hh > oh - 32:                  # would fall off the bottom
+            dy = 2 * hh
+        if sx + hw > ow - 8:                   # ... or off the right
+            dx = -2 * hw
+        if dx or dy:
+            d.move(me["id"], wx + dx / z, wy + dy / z)
+        return
+
+
+def menu_draw():
+    """Render the menu, and act on what is chosen.
+
+    Closes on Esc, on q, on a pick — and on losing focus, which is what a
+    click anywhere else produces. Terminal focus reporting is how it hears
+    about that: foot sends CSI I and CSI O as focus comes and goes, so a
+    click on another window or on the empty canvas dismisses the menu the
+    way a click outside a menu always has.
+    """
+    import select
+    import subprocess
+    import termios
+    import tty
+    d = Drift()
+    items, here = menu_items(d.state(), d)
+    colour = (here.colour if here is not None else "#bb9af7")
+    tint = "\033[38;2;%d;%d;%dm" % tuple(
+        int(colour[i:i + 2], 16) for i in (1, 3, 5))
+
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+    except Exception:
+        old = None
+    # 1003 is any-motion tracking, so the row under the pointer lights up the
+    # way a menu's does; 1004 is focus reporting, which is the dismissal.
+    sys.stdout.write("\033[?25l\033[2J\033[?1006h\033[?1003h\033[?1004h")
+
+    sel = [0]
+
+    try:
+        cols = os.get_terminal_size().columns
+    except OSError:
+        cols = 40
+
+    def paint():
+        buf = ["\033[H"]
+        for i, (label, kind, _) in enumerate(items):
+            lead = " ▸ " if kind == "head" else "   "
+            text = (lead + label).ljust(cols)[:cols]
+            if i == sel[0]:
+                # The highlight runs the full width, as a menu's does — a bar
+                # that stops at the text is a selected string, not a row.
+                buf.append("\033[7m" + (tint if kind == "head" else C_FG)
+                           + text + C_RST)
+            else:
+                buf.append((tint if kind == "head" else C_FG) + text + C_RST)
+            buf.append("\033[K\n")
+            if kind == "head":
+                buf.append(C_DIM + "─" * cols + C_RST + "\033[K\n")
+        # No newline after the last row: one more would scroll the heading
+        # off the top of a window sized exactly to its contents.
+        sys.stdout.write("".join(buf).rstrip("\n"))
+        sys.stdout.flush()
+
+    def row_of(term_row):
+        """Which item a terminal row belongs to (the rule adds one line)."""
+        r = term_row - 1
+        return r - 1 if r > 1 else (0 if r == 0 else None)
+
+    def run(i):
+        what = items[i][2]
+        if what == ["--terminal"]:
+            subprocess.Popen(["foot", "-c", FOOT_INI], start_new_session=True)
+        elif what == ["--map"]:
+            subprocess.Popen(["sol-map"], start_new_session=True)
+        elif what == ["--help-card"]:
+            subprocess.Popen(["sol-help"], start_new_session=True)
         else:
-            cmd_goto(["sun" if here is SUN else str(here.n)])
-    elif tail == "Tidy this planet":
-        cmd_arrange([])
-    elif tail == "Step through its windows":
-        cmd_step([], 1)
-    elif tail == "New terminal here":
-        subprocess.Popen(["foot", "-c",
-                          os.path.expanduser("~/.config/driftwm/foot.ini")],
-                         start_new_session=True)
-    elif tail == "Go to a planet…":
-        menu_go()
-    elif tail == "Overview":
-        subprocess.Popen(["sol-map"], start_new_session=True)
-    elif tail == "Whole system":
-        cmd_system([])
-    elif tail == "Keybindings":
-        subprocess.Popen(["sol-help"], start_new_session=True)
+            subprocess.Popen(["sol"] + what, start_new_session=True)
+
+    buf = ""
+    try:
+        paint()
+        while True:
+            r, _, _ = select.select([sys.stdin], [], [], 0.2)
+            if not r:
+                if buf == "\033":                 # a lone Esc
+                    return
+                buf = ""
+                continue
+            try:
+                chunk = os.read(fd, 64).decode("utf-8", "ignore")
+            except OSError:
+                return
+            if not chunk:
+                return
+            buf += chunk
+            while buf:
+                key, rest = next_key(buf)
+                if key is None:
+                    break
+                buf = rest
+                if key == "\033[O":               # focus lost: a click elsewhere
+                    return
+                if key == "\033[I":
+                    continue
+                if key.startswith("\033[<"):
+                    try:
+                        btn, col, row = (int(v) for v in key[3:-1].split(";"))
+                    except ValueError:
+                        continue
+                    i = row_of(row)
+                    if i is None or not (0 <= i < len(items)):
+                        continue
+                    if btn == 35 or btn == 32:     # motion: follow the pointer
+                        sel[0] = i
+                        paint()
+                    elif btn == 0 and key.endswith("m"):
+                        run(i)
+                        return
+                    continue
+                if key in ("q", "\033"):
+                    return
+                if key in ("\033[A", "k"):
+                    sel[0] = (sel[0] - 1) % len(items)
+                elif key in ("\033[B", "j"):
+                    sel[0] = (sel[0] + 1) % len(items)
+                elif key in ("\r", "\n"):
+                    run(sel[0])
+                    return
+                paint()
+    finally:
+        if old:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\033[?1003l\033[?1004l\033[?1006l\033[?25h")
+        sys.stdout.flush()
 
 
 HELP = """

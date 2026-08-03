@@ -269,6 +269,17 @@ border_color = "#414868"
 border_color_focused = "#414868"
 corner_radius = 14
 
+# The context menu. Deliberately NOT pinned: driftwm places a new window's
+# top-left at the cursor, which is exactly where a menu belongs — and pinning
+# would centre it instead, with no way to move it back. It carries no size
+# here either, because `sol menu` sizes it against the current zoom so the
+# same menu lands on screen whatever altitude you are at.
+[[window_rules]]
+app_id = "sol-menu"
+decoration = "none"
+blur = true
+corner_radius = 10
+
 # The command line, sitting just above the footer it belongs to.
 [[window_rules]]
 app_id = "sol-cmd"
