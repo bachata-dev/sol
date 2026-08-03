@@ -26,6 +26,9 @@ autostart = [
   "mako",
   # catches windows you drag from one planet to another
   "sol watch",
+  # the virgin session flies home, once ever — every session after wakes
+  # wherever you left it, exactly as restore_camera promises
+  "sol first-light",
   # planet name plates
   "foot -a planet-label-1 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
   "foot -a planet-label-2 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e0af68 -e sh ~/.config/driftwm/label.sh 2 VENUS comms",

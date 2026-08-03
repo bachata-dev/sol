@@ -23,6 +23,10 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol arrange [where|all]      tidy a planet's windows into a grid
   sol next / sol prev          step through the windows of this planet
   sol send <name|number>       send the focused window to a planet
+  sol gather [place]           bring every adrift window in (default: the Sun)
+  sol sweep [from] [to]        drain a planet's stack to the archive
+  sol tour                     a narrated first flight; touch anything to stop
+  sol doctor                   is this machine set up right? paste me in bug reports
   sol list                     what is where
   sol here [--waybar]          where am I?
   sol menu [system|go]         the context menu · the ☉ menu · the switcher
@@ -187,6 +191,13 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     off, so you see the space you are about to cross, and zoom in on arrival.
     Afterwards the target is held briefly, because the tail of the zoom
     animation would otherwise pull the camera off the mark.
+
+    A long flight at level zoom climbs. Two planets at working zoom are two
+    screens that never overlap, so a flat hop is a featureless slide past
+    nothing — the pull-back is what shows the belt passing beneath you and
+    the place you left shrinking behind. Same two-command pattern the
+    zooming case already proved: cruise altitude at departure, target zoom
+    on the descent, and the arrival hold soaks up driftwm's easing tail.
     """
     x0, y0 = d.camera()
     z0 = d.zoom()
@@ -200,12 +211,24 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     if zooming and tz < z0:
         d.set_zoom(tz)                                 # pull back, then travel
 
+    # Cruise altitude: high enough that departure and destination share the
+    # screen, never lower than a district frame, and only when the flight is
+    # long enough that flat travel would show nothing but empty sky.
+    cruise = 0.0
+    if not zooming and dist > 2200:
+        cruise = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
+        d.set_zoom(cruise)
+
     steps = max(2, int(dur * rate))
     start = time.perf_counter()
+    descended = cruise == 0.0
     for i in range(1, steps + 1):
         t = i / steps
         e = 0.5 - 0.5 * math.cos(math.pi * t)          # ease in-out
         d.set_camera(x0 + (tx - x0) * e, y0 + (ty - y0) * e)
+        if not descended and t >= 0.62:
+            d.set_zoom(tz)                             # descend on approach
+            descended = True
         ahead = (start + t * dur) - time.perf_counter()
         if ahead > 0:
             time.sleep(ahead)
@@ -213,7 +236,7 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     if zooming and tz > z0:
         d.set_zoom(tz)                                 # settle in on arrival
 
-    hold = 0.4 if zooming else 0.06
+    hold = 0.4 if (zooming or cruise) else 0.06
     until = time.perf_counter() + hold
     while time.perf_counter() < until:
         d.set_camera(tx, ty)
@@ -448,6 +471,30 @@ def assignment(st):
         held[n] = in_order(n, held[n])
     st["sol_districts"] = held
     return held
+
+
+def adrift(st):
+    """Windows that belong nowhere — the founding problem, still reachable.
+
+    assignment() skips anything farther than DISTRICT from every place, so a
+    window dragged into deep space vanishes from the census, the bar, the
+    plates and the overview at once: lost in the way this project exists to
+    prevent. These are those windows. The bar counts them, `sol list` names
+    them, and `sol gather` brings them home — never automatically, because
+    the covenant on cameras extends to windows: nothing moves unasked.
+    """
+    claims = read_claims()
+    out = []
+    for w in real_windows(st):
+        x, y = w["position"]
+        n = claims.get(w["id"], -1)
+        put = PLACES[n] if 0 <= n < len(PLACES) else None
+        if put and math.hypot(x - put.x, y - put.y) <= DISTRICT:
+            continue
+        if nearest(x, y)[1] <= DISTRICT:
+            continue
+        out.append(w)
+    return out
 
 
 def district(st, place):
@@ -741,6 +788,10 @@ def cmd_goto(args):
                 fly(d, w["position"][0], w["position"][1], WORK_ZOOM)
                 return
     fly(d, fx, fy, fz)
+    if fz < WORK_ZOOM and p is not SUN:
+        # Framed rather than landed: the second press is the half of the
+        # habit nobody guesses, so this is the moment to say it.
+        say("goto %d · mod+%d again drops in" % (p.n, p.n))
 
 
 def cmd_dive(args):
@@ -783,6 +834,83 @@ def cmd_system(args):
     w, h = screen(st)
     z = min(w, h) / (2.3 * SYSTEM_R)
     fly(d, 0, 0, max(0.05, z))
+
+
+def cmd_first_light(args):
+    """The virgin session arrives instead of starting. Fires once, ever.
+
+    The autostart promises "a terminal on Earth, so the first thing you see
+    is home" — and then the camera wakes wherever driftwm's default put it,
+    with home 2,600 canvas units out of frame. This closes that gap the way
+    everything here moves: one flight, asked for by being in autostart, and
+    never again — the marker outlives reboots, so an existing user never
+    sees it at all.
+    """
+    mark = os.path.join(STATE, "first-light")
+    if os.path.exists(mark):
+        return
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(mark, "w") as f:
+            f.write("the first session flew home\n")
+    except OSError:
+        return
+    d = Drift()
+    # The session is still assembling around us — plates, bars, the home
+    # terminal. Wait for home to exist before framing it, briefly.
+    deadline = time.time() + 12.0
+    while time.time() < deadline:
+        st = d.state()
+        if any(w.get("app_id") == "home-term" for w in st.get("windows", [])):
+            break
+        time.sleep(0.25)
+    time.sleep(0.6)                       # let driftwm place what just mapped
+    st = d.state()
+    home = find_place("home") or SUN
+    fly(d, *frame(st, home, screen(st)))
+
+
+def cmd_tour(args):
+    """An asked-for first flight, narrated by the footer.
+
+    Five legs over the places that matter, each named in the footer with the
+    gesture and the key that would have made it — so by the end the
+    keybinding card is a list of places you have been rather than a table.
+
+    Interruptible on the planetarium's precedent: touch the view between
+    legs and the tour yields immediately. It is your desk, not a ride.
+    """
+    d = Drift()
+    st = d.state()
+    ow, oh = screen(st)
+    home = find_place("home") or PLANETS[2]
+    outward = PLANETS[min(home.n, 7)]        # the next planet out from home
+    legs = [
+        ("the whole system · four fingers up, or mod+u",
+         lambda: fly(d, 0, 0, max(0.05, min(ow, oh) / (2.3 * SYSTEM_R)))),
+        ("the Sun is home base · mod+0",
+         lambda: fly(d, *frame(d.state(), SUN, (ow, oh)))),
+        ("each planet is a workspace · mod+%d is %s" % (home.n, home.name),
+         lambda: fly(d, *frame(d.state(), home, (ow, oh)))),
+        ("outward is away from your attention · mod+→, or four fingers left",
+         lambda: fly(d, *frame(d.state(), outward, (ow, oh)))),
+        ("and home again · right-click the sky for the menu, mod+/ for every key",
+         lambda: fly(d, *frame(d.state(), home, (ow, oh)))),
+    ]
+    where = None
+    for text, go in legs:
+        if where is not None:
+            cx, cy = d.camera()
+            if math.hypot(cx - where[0], cy - where[1]) > 60:
+                return                       # you took the controls; it yields
+        footer(text)
+        try:
+            go()
+        except KeyboardInterrupt:
+            return
+        where = d.camera()
+        time.sleep(2.2)
+    footer("the tour · mod+/ has every key")
 
 
 def cmd_arrange(args):
@@ -886,6 +1014,82 @@ def cmd_send(args):
     write_cards(d, st)
     if "--stay" not in args:
         fly(d, *frame(st, p, (ow, oh)))
+
+
+def _resettle(d, st, wins, dst, others=()):
+    """Send a batch of windows to one place, on the arcs they would take.
+
+    The shared tail of `gather` and `sweep`: claim each window for the
+    destination, tidy there (and any district that lost members), and glide
+    everything from where it really was — the same journey a drag would make,
+    run as one motion.
+    """
+    ow, oh = screen(st)
+    claims = read_claims()
+    origins = {}
+    for w in wins:
+        origins[w["id"]] = tuple(w["position"])
+        d.move(w["id"], dst.x, dst.y)
+        w["position"] = [dst.x, dst.y]
+        claims[w["id"]] = dst.n
+    write_claims(st, claims)
+    st.pop("sol_districts", None)
+    plan = []
+    tidy(d, st, dst, ow / oh, plan)
+    for p in others:
+        if p.n != dst.n:
+            tidy(d, st, p, ow / oh, plan)
+    plan = [(wid, origins.get(wid, a), b) for wid, a, b in plan]
+    glide(d, plan, arc=ARC)
+    spotlight(d, st)
+    write_plates(st)
+    write_cards(d, st)
+
+
+def cmd_gather(args):
+    """Bring every adrift window in — nothing on this canvas is ever lost.
+
+    To the Sun unless you name a place, because the Sun is the inbox: the
+    one place with no role to contaminate. Never automatic — the covenant
+    on cameras extends to windows — so this is the verb you say when the
+    bar's "adrift" count should be zero again.
+    """
+    d = Drift()
+    st = d.state()
+    dst = find_place(args[0]) if args else SUN
+    if not dst:
+        sys.exit("sol gather: unknown place '%s'" % args[0])
+    lost = adrift(st)
+    if not lost:
+        print("nothing adrift")
+        return
+    _resettle(d, st, lost, dst)
+    print("gathered %s to %s" % (windows_word(len(lost)), dst.name))
+
+
+def cmd_sweep(args):
+    """Drain a planet's stack to the archive — Neptune's role, as a verb.
+
+    The grid holds the DECK most recent windows and the rest collapse into a
+    stack you page through. Sweep takes the stack — the windows the planet
+    has visibly stopped needing — and files them on Neptune in one motion,
+    so a crowded planet ends tidy without closing anything. Named places
+    override both ends: `sol sweep 5 2` drains Jupiter's stack to Venus.
+    """
+    d = Drift()
+    st = d.state()
+    src = find_place(args[0]) if args else nearest(*d.camera())[0]
+    if not src:
+        sys.exit("sol sweep: unknown place '%s'" % args[0])
+    dst = find_place(args[1]) if len(args) > 1 else find_place("archive")
+    if not dst:
+        sys.exit("sol sweep: unknown place '%s'" % args[1])
+    over = district(st, src)[DECK:]
+    if not over:
+        print("nothing stacked at %s" % src.name)
+        return
+    _resettle(d, st, list(over), dst, others=[src])
+    print("swept %s from %s to %s" % (windows_word(len(over)), src.name, dst.name))
 
 
 # ── Catching a drag ───────────────────────────────────────────────────────
@@ -1271,19 +1475,114 @@ BAR_PARTS = ("where", "holding", "strip", "last",
 # say nothing, or the footer would only ever read "here".
 LOG = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-last")
 # `prompt` is quiet because it records the command you typed into it, and
-# main() must not then overwrite that with the word "prompt".
+# main() must not then overwrite that with the word "prompt". `first-light`
+# and `tour` are quiet because they write the footer themselves — the first
+# so the fresh-install hint below survives the arrival, the second because
+# its whole narration runs through the footer.
 QUIET = {"here", "bar", "plate", "list", "watch", "map", "help", "menu",
-         "prompt"}
+         "prompt", "first-light", "tour", "doctor"}
+
+# What survives reboots: ~/.local/state/sol. The runtime files above are
+# per-boot on purpose; these two facts are not. `first-light` is whether the
+# virgin session has flown home; `spoken` is whether sol has ever run a
+# command for this user — the moment the footer stops teaching.
+STATE = os.path.expanduser(os.path.join(
+    os.environ.get("XDG_STATE_HOME") or "~/.local/state", "sol"))
+SPOKEN = os.path.join(STATE, "spoken")
+
+
+def key_of(argv):
+    """The keybinding that would have done what was just done.
+
+    The context menu's accelerator column is the doctrine — a surface
+    teaches you to stop needing it — and the footer is where every mouse
+    habit reports. So a click on ③ in the bar leaves "goto 3 · mod+3"
+    behind it, and the key rides along until it is the habit.
+    """
+    cmd, a = argv[0], (argv[1] if len(argv) > 1 else "")
+    if cmd == "goto":
+        p = find_place(a)
+        return "" if not p else ("mod+0" if p is SUN else "mod+%d" % p.n)
+    if cmd == "send":
+        p = find_place(a)
+        return "mod+ctrl+%d" % p.n if p and p is not SUN else ""
+    if cmd == "hop":
+        return "mod+←" if a.startswith(("in", "sun", "le", "pr")) else "mod+→"
+    if cmd == "shift":
+        return "mod+shift+←" if a.startswith("b") else "mod+shift+→"
+    return {"system": "mod+u", "arrange": "mod+a", "next": "mod+n",
+            "prev": "mod+p", "dive": "pinch out"}.get(cmd, "")
+
+
+_SAY = []
+
+
+def say(text):
+    """What the footer should read instead of the bare command — for the
+    moments when the command is not the lesson, e.g. a goto that framed the
+    district and wants you to know the same key again drops you in."""
+    _SAY[:] = [text]
+
+
+def footer(text):
+    """Put one line in the strip along the bottom.
+
+    The footer is a file the bar reads, so writing to it is the whole of
+    speaking here — and every caller wants the same thing when the write
+    fails, which is to carry on. A desktop that dies because it could not
+    narrate itself would be a poor trade.
+    """
+    try:
+        with open(LOG, "w") as f:
+            f.write(text)
+    except OSError:
+        pass
 
 
 def note(argv):
     if not argv or argv[0] in QUIET:
         return
-    try:
-        with open(LOG, "w") as f:
-            f.write(" ".join(argv))
-    except OSError:
-        pass
+    if _SAY:
+        text = _SAY[0]
+    else:
+        text = " ".join(argv)
+        key = key_of(argv)
+        if key:
+            text += " · " + key
+    footer(text)
+    if not os.path.exists(SPOKEN):
+        try:
+            os.makedirs(STATE, exist_ok=True)
+            with open(SPOKEN, "w") as f:
+                f.write("sol has spoken; the footer reports instead of teaching\n")
+        except OSError:
+            pass
+
+
+def note_failure(action, why):
+    """A thing that would not start, said out loud where things get said.
+
+    The ☉ menu's rows run programs this machine may simply not have —
+    swaylock on a box without it, `systemctl` under an init that is not
+    systemd. Those rows used to fail into silence, which reads exactly like
+    a menu that ignored you. The footer is already the place sol reports
+    from, so a refusal reports there too, naming the program rather than the
+    row: the row said "Lock screen", but what is missing is `swaylock`.
+    """
+    footer("%s did not start · %s" % (action[0], why.strerror or why))
+
+
+def first_words():
+    """Until the first command ever, the footer teaches instead of reporting.
+
+    A virgin install boots to sol's one always-visible strip saying nothing,
+    exactly when its reader knows nothing. This is the covenant-safe answer:
+    a static line in space that was empty anyway, gone for good the moment
+    the first real command overwrites it.
+    """
+    if os.path.exists(SPOKEN):
+        return ""
+    return "mod+/ the keys · mod+e the map · right-click the sky"
 
 
 def last_run():
@@ -1292,9 +1591,9 @@ def last_run():
             said = f.read().strip()
         age = time.time() - os.path.getmtime(LOG)
     except OSError:
-        return ""
+        return first_words()
     if not said or age > 900:
-        return ""
+        return first_words()
     when = ("just now" if age < 5 else "%ds ago" % int(age) if age < 90
             else "%dm ago" % int(age / 60))
     return "%s · %s" % (said, when)
@@ -1345,19 +1644,29 @@ def write_bar(st, place, on_it, n, z):
     # arithmetic about nothing.
     count = held(n) if (place and on_it and place is not SUN) else "%d" % n
     holding = role if not n else "%s · %s" % (role, count)
+    # Adrift windows are exactly what this bar exists to prevent going
+    # unnoticed, so when there are any, the tally says so where you look.
+    lost = len(adrift(st))
+    if lost:
+        holding += '  ·  <span foreground="#e0af68">%d adrift</span>' % lost
     tally = "  ".join("%d %s · %s" % (p.n, p.name, held(counts[p.n]))
                       for p in PLANETS if counts.get(p.n)) or "nothing on the canvas"
+    hold_tip = windows_word(n) + " · mod+a tidies" if n else role
+    if lost:
+        hold_tip += " · %d in no district — sol gather brings them home" % lost
     lines = [
-        {"text": name, "class": cls, "tooltip": "%s — %d%%" % (role, int(z * 100))},
-        {"text": holding, "class": cls, "tooltip": windows_word(n) if n else role},
+        {"text": name, "class": cls,
+         "tooltip": "%s — %d%% · mod+u for the whole system" % (role, int(z * 100))},
+        {"text": holding, "class": cls, "tooltip": hold_tip},
         {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
         {"text": last_run(), "class": "last", "tooltip": "what sol last did"},
     ]
     for p in PLANETS:
         c = counts.get(p.n, 0)
         lines.append({"text": chip(p, c, here), "class": "chip",
-                      "tooltip": "%d %s — %s%s" % (p.n, p.name, p.role,
-                                                   " · %d" % c if c else "")})
+                      "tooltip": "%d %s — %s%s · mod+%d" % (p.n, p.name, p.role,
+                                                            " · %d" % c if c else "",
+                                                            p.n)})
     text = "\n".join(json.dumps(o) for o in lines) + "\n"
     try:
         with open(BAR) as f:
@@ -1420,9 +1729,14 @@ def cmd_list(args):
         print("%-12s %-9s %d" % (head, p.role, len(wins)))
         for w in wins:
             print("    %-18s %s" % (str(w.get("app_id"))[:18], w.get("title", "")[:44]))
-    stray = total - sum(counts.values())
-    if stray:
-        print("%-12s %-9s %d" % ("deep space", "adrift", stray))
+    lost = adrift(st)
+    if lost:
+        print("%-12s %-9s %d" % ("deep space", "adrift", len(lost)))
+        for w in lost:
+            x, y = w["position"]
+            print("    %-18s %-32s (%d, %d)" % (str(w.get("app_id"))[:18],
+                                                w.get("title", "")[:32], x, y))
+        print("    sol gather brings them to the Sun")
     if not total:
         print("no windows on the canvas")
 
@@ -1465,9 +1779,15 @@ def cmd_prompt(args):
         argv = ["goto"] + argv                 # "jupiter" means go to Jupiter
         fn = CMDS["goto"]
     if fn is None:
-        sys.stdout.write("  \033[38;2;247;118;142mno such command: %s\033[0m\n" % argv[0])
+        # The point of error is the one moment a hint is guaranteed an
+        # audience, so a typo answers with the nearest real word.
+        import difflib
+        near = difflib.get_close_matches(argv[0], words, n=1, cutoff=0.5)
+        also = " — %s?" % near[0] if near else ""
+        sys.stdout.write("  \033[38;2;247;118;142mno such command: %s\033[0m%s\n"
+                         % (argv[0], also))
         sys.stdout.flush()
-        time.sleep(1.4)
+        time.sleep(2.0 if near else 1.4)
         return
     fn(argv[1:])
     note(argv)
@@ -1494,11 +1814,18 @@ def menu_go():
     must arrive under the pointer, not this.
     """
     counts = census(Drift().state())
-    items = ["☉  Sun — home base"]
+
+    def line(head, key):
+        # The key down the right, the way the context menu already does it —
+        # the switcher teaches mod+N the same way the menu teaches mod+a.
+        return "%s%s%s" % (head, " " * max(2, 38 - len(head)), key)
+
+    items = [line("☉  Sun — home base", "mod+0")]
     for p in PLANETS:
         c = counts.get(p.n, 0)
-        items.append("%d  %s — %s%s" % (p.n, p.name, p.role,
-                                        "  ·  %d" % c if c else ""))
+        items.append(line("%d  %s — %s%s" % (p.n, p.name, p.role,
+                                             "  ·  %d" % c if c else ""),
+                          "mod+%d" % p.n))
     out = _pick(items)
     if out:
         cmd_goto(["sun" if out.startswith("☉") else out.split()[0]])
@@ -1638,6 +1965,167 @@ def cmd_menu(args):
         os.execvp("sol-menu", argv)
     except OSError:
         sys.exit("sol menu: sol-menu is not installed")
+
+
+def cmd_doctor(args):
+    """The first ten minutes on someone else's machine, made diagnosable.
+
+    Every check here is a way a fresh install has actually looked broken
+    while nothing was wrong with the code: driftwm not up, the config not
+    installed, the wrong connector named, the fonts missing so the bar is
+    boxes, no touchpad so the flagship gesture is dead air. One paste of
+    this output is the whole bug report.
+    """
+    import shutil
+    import subprocess
+    OK, WARN, BAD = ("\033[38;2;158;206;106m✓\033[0m",
+                     "\033[38;2;224;175;104m!\033[0m",
+                     "\033[38;2;247;118;142m✗\033[0m")
+    sick = []
+
+    def row(mark, text):
+        print("  %s %s" % (mark, text))
+        if mark == BAD:
+            sick.append(text)
+
+    d = None
+    try:
+        d = Drift()
+        st = d.state()
+        out = active_output(st)
+        row(OK, "driftwm is up — output %s at %dx%d, zoom %d%%, %d windows"
+            % (out.get("name", "?"), *[int(v) for v in (out.get("size") or [0, 0])],
+               int((out.get("zoom") or 1) * 100), len(st.get("windows", []))))
+    except SystemExit:
+        row(BAD, "driftwm is not running (no IPC socket) — start it, then run this again")
+        st = {}
+
+    cfg = os.path.expanduser("~/.config/driftwm/config.toml")
+    if os.path.exists(cfg):
+        row(OK, "config installed at ~/.config/driftwm")
+        try:
+            with open(cfg) as f:
+                text = f.read()
+            import re
+            named = re.findall(r'^name = "([^"]+)"', text, re.M)
+            if d and named and all(o.get("name") not in named
+                                   for o in st.get("outputs", []) if o.get("name")):
+                have = ", ".join(o.get("name", "?") for o in st.get("outputs", []))
+                row(WARN, "[[outputs]] names %s but driftwm sees %s — scale/hot-corner "
+                          "rules are not applying" % ("/".join(named), have))
+        except OSError:
+            pass
+    else:
+        row(BAD, "no config at ~/.config/driftwm/config.toml — run install.sh")
+
+    try:
+        fonts = subprocess.run(["fc-list"], capture_output=True, text=True,
+                               timeout=5).stdout.lower()
+        row(OK if "jetbrains mono" in fonts else BAD,
+            "JetBrains Mono" + ("" if "jetbrains mono" in fonts
+                                else " missing — every surface here is set in it"))
+        nerd = "nerd font" in fonts or " nf" in fonts or "nerdfont" in fonts
+        row(OK if nerd else WARN,
+            "a Nerd Font" + ("" if nerd else " missing — the bar's glyphs will be boxes"))
+    except (OSError, subprocess.TimeoutExpired):
+        row(WARN, "fc-list unavailable — could not check fonts")
+
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        import ctypes
+        ctypes.CDLL("libgtk-layer-shell.so.0")
+        row(OK, "GTK 3 + gtk-layer-shell (the ☉ and context menus)")
+    except Exception:
+        row(BAD, "python3-gi or libgtk-layer-shell missing — right-click has nothing to open")
+
+    for cmd_name, why in (("foot", "every terminal surface"), ("waybar", "the bar"),
+                          ("fuzzel", "the mod+tab switcher"), ("mako", "notifications"),
+                          ("grim", "screenshots")):
+        row(OK if shutil.which(cmd_name) else WARN,
+            "%s%s" % (cmd_name, "" if shutil.which(cmd_name) else " missing — " + why))
+
+    pad = False
+    try:
+        for dev in os.listdir("/sys/class/input"):
+            name_f = "/sys/class/input/%s/device/name" % dev
+            if os.path.exists(name_f):
+                with open(name_f) as f:
+                    if "touchpad" in f.read().lower():
+                        pad = True
+                        break
+    except OSError:
+        pass
+    row(OK if pad else WARN,
+        "touchpad" + ("" if pad else " not found — the four-finger layer is idle; "
+                                    "the bar's buttons and the keys do everything it does"))
+
+    # Can this session take the machine down? logind grants that to the active
+    # session on a local seat and challenges everyone else, and a challenge
+    # with no agent to answer it is a power menu that does nothing when
+    # clicked — which looks like a broken menu and is really a broken session.
+    # The usual cause is a second desktop still autologging in on another VT,
+    # so the count is named too: it is the fix, not just the symptom.
+    try:
+        import subprocess
+
+        def ask(*argv):
+            return subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+
+        mine = os.environ.get("XDG_SESSION_ID") or ""
+        seat = ask("loginctl", "show-session", mine, "-p", "Seat", "--value") if mine else ""
+        can = ask("busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+                  "org.freedesktop.login1.Manager", "CanReboot")
+        seated = [ln for ln in ask("loginctl", "list-sessions", "--no-legend").splitlines()
+                  if " seat" in ln]
+        if '"yes"' in can:
+            row(OK, "this session may restart and shut down the machine")
+        elif not seat:
+            # Asked over ssh, where logind challenges anyone without a seat.
+            # That answer is about this shell, not about the desktop, so it
+            # must not read as a fault — most of this file is worth running
+            # remotely, and one honest "cannot tell from here" is cheaper
+            # than a red cross that sends you hunting a bug that is not there.
+            row(WARN, "asked from a session with no seat (ssh?) — logind challenges "
+                      "those whatever the desktop can do, so run this inside sol to "
+                      "test the ☉ menu's Restart and Shut down")
+        else:
+            row(BAD, "logind will not let this session restart the machine — the ☉ "
+                     "menu's Restart and Shut down will do nothing. %d seat sessions "
+                     "are open; a second desktop left autologging in on another VT "
+                     "is the usual reason" % len(seated))
+    except (OSError, subprocess.TimeoutExpired):
+        row(WARN, "loginctl/busctl unavailable — could not check the power menu")
+
+    # Whether this machine has a way in at all. A desktop you have to start by
+    # hand over ssh is the state this file exists to make visible.
+    boot = [p for p in (os.path.expanduser("~/.bash_profile"),
+                        os.path.expanduser("~/.profile")) if os.path.exists(p)]
+    wired = False
+    for p in boot:
+        try:
+            with open(p) as f:
+                wired = wired or "sol-session" in f.read()
+        except OSError:
+            pass
+    row(OK if wired else WARN,
+        "boots into sol" if wired else
+        "nothing starts sol at boot — install.sh can wire the console, or run "
+        "`sudo driftwm-up` on a spare VT")
+    log = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp",
+                       "sol-session.log")
+    if os.path.exists(log):
+        row(OK, "session log at %s" % log)
+
+    if d:
+        lost = adrift(st)
+        if lost:
+            row(WARN, "%s adrift beyond every district — sol gather brings them home"
+                % windows_word(len(lost)))
+
+    if sick:
+        sys.exit(1)
 
 
 HELP = """
@@ -2136,6 +2624,8 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "here": cmd_here, "menu": cmd_menu, "map": cmd_map, "help": cmd_help,
         "arrange": cmd_arrange, "list": cmd_list, "plate": cmd_plate, "bar": cmd_bar,
         "watch": cmd_watch, "prompt": cmd_prompt,
+        "gather": cmd_gather, "sweep": cmd_sweep, "tour": cmd_tour,
+        "doctor": cmd_doctor, "first-light": cmd_first_light,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 
