@@ -150,11 +150,23 @@ class Drift:
         self.req({"Action": name})
 
 
+def active_output(st):
+    """The output being looked at — which is not reliably the first one.
+
+    Every screen-space calculation has to agree about which output it is
+    working in. Taking the size from the active one and the camera from
+    `outputs[0]` is the kind of mismatch that only shows up on a second
+    monitor, and then shows up as a menu opening on the wrong screen.
+    """
+    outs = st.get("outputs") or []
+    return next((o for o in outs if o.get("active")),
+                outs[0] if outs else {"camera": [0.0, 0.0], "zoom": 1.0,
+                                      "size": [1920, 1080]})
+
+
 def screen(st):
     """Logical size of the active output."""
-    outs = st.get("outputs") or []
-    out = next((o for o in outs if o.get("active")), outs[0] if outs else {})
-    w, h = out.get("size") or [1920, 1080]
+    w, h = active_output(st).get("size") or [1920, 1080]
     return float(w), float(h)
 
 
@@ -798,12 +810,20 @@ def cmd_arrange(args):
 
 
 def cmd_step(args, step=1):
-    """Focus the next window of the place we are at, and fly to it."""
+    """Focus the next window of a place, and fly to it.
+
+    Named, it steps through that place; unnamed, through wherever the view
+    already is. The menu needs the named form: pointing at Jupiter from
+    across the system and asking to step through its windows must step
+    through Jupiter's, not through whatever the camera is nearest.
+    """
     d = Drift()
     st = d.state()
     ow, oh = screen(st)
     x, y = d.camera()
-    here, dist = nearest(x, y)
+    here = find_place(args[0]) if args else nearest(x, y)[0]
+    if not here:
+        sys.exit("sol: unknown place '%s'" % args[0])
     wins = district(st, here)
     if not wins:
         sys.exit("sol: no windows at %s" % here.name)
@@ -1150,6 +1170,34 @@ def whereabouts(st, cam, zoom):
     return place, dist <= reach, counts.get(place.n, 0)
 
 
+# How near the pointer has to be to a planet to be pointing at it, measured
+# on the screen rather than on the canvas. A canvas distance cannot serve
+# both altitudes: 900 units is half a screen at working zoom and four pixels
+# across the whole-system view. So the reach is the more generous of the two —
+# the district you are standing in when you are in one, and a comfortable
+# target around the planet itself when the whole system is in view.
+POINT_REACH = 110      # screen pixels around a planet that count as pointing at it
+
+
+def place_under(st, at, zoom):
+    """(place, how many windows it has) for the place under a canvas point.
+
+    The camera answers "where am I"; this answers "what did you click on",
+    and out at the whole-system view those are different questions with
+    different answers. Pointing at nothing in particular — the sky between
+    the orbits — is not a place, and returns None.
+    """
+    x, y = at
+    counts = census(st)
+    for p in PLACES:
+        box = bounds(st, p)
+        if box and abs(x - box[0]) <= box[2] and abs(y - box[1]) <= box[3]:
+            return p, counts.get(p.n, 0)
+    p, dist = nearest(x, y)
+    reach = max(ARRIVE_RADIUS, POINT_REACH / max(zoom, 0.01))
+    return (p, counts.get(p.n, 0)) if dist <= reach else (None, sum(counts.values()))
+
+
 def windows_word(n):
     return "%d window%s" % (n, "" if n == 1 else "s")
 
@@ -1457,45 +1505,22 @@ def menu_go():
 
 
 # ── The context menu ──────────────────────────────────────────────────────
-# A context menu has to do two things that a launcher will not: open under
-# the pointer, and close when you click away from it. fuzzel does neither —
-# it is centred by design and holds an exclusive keyboard grab, so only Esc
-# ever dismissed it. That is the whole of what was wrong.
-#
-# So the menu is a window of sol's own. driftwm places a new window's
-# top-left at the cursor, which is exactly where a menu belongs — but only
-# for canvas windows: pinning a window centres it, and a pinned window
-# cannot be moved afterwards. A canvas window is therefore the only kind
-# that can appear where you clicked, and a canvas window is drawn at the
-# zoom you are at. So the size and the font are divided by that zoom, and
-# what lands on screen is the same menu at every altitude.
-# foot renders JetBrains Mono at about 0.60 em wide and 1.31 em tall, and a
-# point is 4/3 of a pixel at 96dpi — the missing 4/3 is what wrapped the
-# first draft's header onto a second line and scrolled the title away.
-# Must match [zoom] interact_min in config.toml. Below that zoom driftwm
-# treats a canvas window as too small to touch — it suppresses pointer input
-# and turns a click into "fly to this window" — which is what makes click-to-
-# fly and clicking a name plate work from far out. A canvas menu down there
-# would open fine and then refuse every click, so below this line the menu is
-# a pinned window instead: always its own size, always clickable, and centred,
-# because pinned windows cannot be moved and because "at the pointer" means
-# very little when the pointer is over a whole solar system.
-INTERACT_MIN = 0.45
-MENU_FONT = 11.0
-CELL_W = MENU_FONT * 4.0 / 3.0 * 0.60
-CELL_H = MENU_FONT * 4.0 / 3.0 * 1.31
-MENU_PAD = 8
-
-
-def menu_items(st, d):
-    """What the menu offers: a title, then what you would do to this place.
+# The menu itself is `sol-menu`, a layer-shell surface — screen space, where
+# a menu belongs. What lives here is only what it says: which place it is
+# about, and the rows it offers for that place. See bin/sol-menu for why it
+# is no longer a window on the canvas.
+def menu_items(here, n, standing):
+    """The rows of the context menu for the place under the pointer.
 
     Shaped like a menu rather than a list — a heading that names what you
     right-clicked, rules between groups, and the keyboard equivalent of each
     item down the right, which is how a menu teaches you to stop needing it.
+
+    Every verb names its place explicitly, because the place under the
+    pointer is not necessarily the place you are standing on: pointing at
+    Jupiter from the whole-system view and choosing "tidy" must tidy Jupiter,
+    not whatever the camera happens to be nearest.
     """
-    place, on_it, n = whereabouts(st, d.camera(), d.zoom())
-    here = place if on_it and place is not None else None
     if here is None:
         title = "the system  ·  all eight planets"
     elif here is SUN:
@@ -1504,303 +1529,36 @@ def menu_items(st, d):
         title = "%d %s  ·  %s%s" % (here.n, here.name, here.role,
                                     "  ·  %d" % n if n else "")
     out = [("title", title, "", None), ("sep", "", "", None)]
-    if here is not None and n:
-        out.append(("item", "Tidy this planet", "mod+a", ["arrange"]))
-        out.append(("item", "Step through its windows", "mod+n", ["next"]))
-    out.append(("item", "New terminal here", "mod+⏎", ["--terminal"]))
+    if here is not None:
+        token = "sun" if here is SUN else str(here.n)
+        if not standing:
+            # You are pointing at somewhere you are not. Say so first: it is
+            # the likeliest thing you meant by pointing at it.
+            out.append(("item", "Go to %s" % here.name,
+                        "mod+%s" % (0 if here is SUN else here.n),
+                        ["sol", "goto", token]))
+        if n:
+            out.append(("item", "Tidy %s" % ("the Sun" if here is SUN else "this planet"),
+                        "mod+a", ["sol", "arrange", token]))
+            out.append(("item", "Step through its windows", "mod+n",
+                        ["sol", "next", token]))
+    out.append(("item", "New terminal here", "mod+⏎", ["foot", "-c", FOOT_INI]))
     out.append(("sep", "", "", None))
-    out.append(("item", "Go to a planet…", "mod+tab", ["menu", "go"]))
-    out.append(("item", "Overview", "mod+e", ["--map"]))
-    out.append(("item", "Whole system", "mod+u", ["--system"]))
-    out.append(("item", "Keybindings", "mod+/", ["--help-card"]))
-    return out, here
-
-
-def menu_size(items):
-    """(columns, rows) the menu needs — the widest row, and one per line."""
-    cols = max(len(label) + len(accel) for _, label, accel, _ in items) + 7
-    return max(cols, 26), len(items) + 1
+    out.append(("item", "Go to a planet…", "mod+tab", ["sol", "menu", "go"]))
+    out.append(("item", "Overview", "mod+e", ["sol-map"]))
+    out.append(("item", "Whole system", "mod+u", ["sol", "system"]))
+    out.append(("item", "Keybindings", "mod+/", ["sol-help"]))
+    return out
 
 
 def cmd_menu(args):
-    """Open the context menu under the pointer — or, with `go`, the switcher."""
+    """Open the context menu at the pointer — or, with `go`, the switcher."""
     if args and args[0] == "go":
         return menu_go()
-    if args and args[0] == "draw":
-        return menu_draw()
-
-    d = Drift()
-    st = d.state()
-    items, _ = menu_items(st, d)
-    z = max(0.02, d.zoom())
-    cols, rows = menu_size(items)
-    far = z < INTERACT_MIN
-    # A canvas menu is drawn at the zoom you are at, so its size and font are
-    # divided by that zoom; a pinned one is in screen pixels already.
-    scale = 1.0 if far else z
-    w = int((cols * CELL_W + 2 * MENU_PAD) / scale)
-    h = int((rows * CELL_H + 2 * MENU_PAD) / scale)
-    import subprocess
-    subprocess.Popen(
-        ["foot", "-a", "sol-menu-far" if far else "sol-menu",
-         "--window-size-pixels=%dx%d" % (w, h),
-         "--font=JetBrains Mono:size=%.1f" % (MENU_FONT / scale),
-         "-o", "colors.alpha=0.97", "-o", "colors.background=1a1b26",
-         "-o", "main.pad=%dx%d" % (MENU_PAD, MENU_PAD),
-         "-e", "sol", "menu", "draw"],
-        start_new_session=True)
-    if far:
-        reveal_pinned(d)
-    else:
-        place_at_pointer(d)
-
-
-def reveal_pinned(d, tries=120):
-    """Fade in the far-out menu, which driftwm has already centred for us."""
-    for _ in range(tries):
-        time.sleep(0.02)
-        me = next((w for w in d.state().get("pinned", [])
-                   if w.get("app_id") == "sol-menu-far"), None)
-        if me and me["size"][0] > 0:
-            reveal(d, me["id"])
-            return
-    reveal(d, None)
-
-
-def place_at_pointer(d, tries=120):
-    """Put the menu's corner on the pointer, and unfold it away from the edge.
-
-    driftwm centres a new window on the cursor, which is right for a window
-    and wrong for a menu: menus hang their top-left corner off the pointer
-    and open down and to the right, so the click point stays visible and the
-    list grows into the space you have. Near an edge they open the other way
-    instead — up, or left, or both — which is why a menu in the corner of a
-    screen still shows you all of itself.
-
-    The centring is what we are given, so it is also how we learn where the
-    pointer is: the window arrives centred on it, and that centre is the
-    click. But it arrives in two steps — it appears at 0x0 before it is
-    configured and placed — and moving it in that gap moves nothing, because
-    the placement that follows overwrites it. So this waits for a size, and
-    then for a position that has stopped changing.
-    """
-    wid, seen = None, None
     try:
-        for _ in range(tries):
-            time.sleep(0.02)
-            st = d.state()
-            me = next((w for w in st.get("windows", [])
-                       if w.get("app_id") == "sol-menu"), None)
-            if not me or me["size"][0] <= 0 or me["size"][1] <= 0:
-                continue
-            wid = me["id"]
-            at = tuple(me["position"])
-            if at != seen:        # still being placed; wait for it to settle
-                seen = at
-                continue
-
-            ow, oh = screen(st)
-            out = st["outputs"][0]
-            cx, cy = out["camera"]
-            z = out["zoom"] or 1.0
-            (wx, wy), (sw, sh) = me["position"], me["size"]
-            w, h = sw * z, sh * z
-            px = ow / 2.0 + (wx - cx) * z      # the pointer: where it centred
-            py = oh / 2.0 - (wy - cy) * z
-            gap = 2.0
-            left = px + gap if px + gap + w <= ow - 8 else px - gap - w
-            top = py + gap if py + gap + h <= oh - 34 else py - gap - h
-            left = max(8.0, min(left, ow - 8 - w))
-            top = max(36.0, min(top, oh - 34 - h))
-            d.move(me["id"],
-                   cx + (left + w / 2.0 - ow / 2.0) / z,
-                   cy - (top + h / 2.0 - oh / 2.0) / z)
-            # Let the (invisible) move all but finish. driftwm eases window
-            # moves, so the last few percent arrive during the fade, where
-            # nothing is solid enough yet to read as movement.
-            time.sleep(0.10)
-            break
-    finally:
-        # Whatever happened above, the menu must not be left invisible.
-        reveal(d, wid)
-
-
-def reveal(d, wid, ms=100, steps=10):
-    """Fade the menu in where it landed, rather than let it slide into view.
-
-    Eased rather than linear: a menu that arrives at a constant rate reads
-    as a light being turned up, and one that arrives quickly and settles
-    reads as a menu.
-    """
-    if wid is None:
-        st = d.state()
-        me = next((w for w in list(st.get("windows", [])) + list(st.get("pinned", []))
-                   if str(w.get("app_id", "")).startswith("sol-menu")), None)
-        if not me:
-            return
-        wid = me["id"]
-    for i in range(1, steps + 1):
-        t = i / float(steps)
-        d.opacity(wid, math.sin(t * math.pi / 2.0))     # ease out
-        time.sleep(ms / 1000.0 / steps)
-
-
-def menu_draw():
-    """Render the menu, and act on what is chosen.
-
-    Closes on Esc, on q, on a pick — and on losing focus, which is what a
-    click anywhere else produces. Terminal focus reporting is how it hears
-    about that: foot sends CSI I and CSI O as focus comes and goes, so a
-    click on another window or on the empty canvas dismisses the menu the
-    way a click outside a menu always has.
-    """
-    import select
-    import subprocess
-    import termios
-    import tty
-    d = Drift()
-    items, here = menu_items(d.state(), d)
-    tint = "\033[38;2;%d;%d;%dm" % tuple(
-        int((here.colour if here is not None else "#bb9af7")[i:i + 2], 16)
-        for i in (1, 3, 5))
-    SEL = "\033[48;2;40;52;87m"        # the selection bar
-    ACC = "\033[38;2;86;95;137m"       # the keyboard equivalent, kept quiet
-    ACC_ON = "\033[38;2;138;148;186m"  # ... and lifted where the bar is under it
-    RULE = "\033[38;2;41;46;66m"
-
-    fd = sys.stdin.fileno()
-    try:
-        old = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
-    except Exception:
-        old = None
-    # 1003 is any-motion tracking, so the row under the pointer lights up the
-    # way a menu's does; 1004 is focus reporting, which is the dismissal.
-    sys.stdout.write("\033[?25l\033[2J\033[?1006h\033[?1003h\033[?1004h")
-
-    try:
-        cols = os.get_terminal_size().columns
+        os.execvp("sol-menu", ["sol-menu"])
     except OSError:
-        cols = menu_size(items)[0]
-
-    live = [i for i, it in enumerate(items) if it[0] == "item"]
-    sel = [live[0] if live else 0]
-
-    def paint():
-        buf = ["\033[H"]
-        for i, (kind, label, accel, _) in enumerate(items):
-            if kind == "sep":
-                buf.append(RULE + " " + "─" * max(0, cols - 2) + C_RST)
-            elif kind == "title":
-                buf.append(tint + " " + label.ljust(cols - 1)[:cols - 1] + C_RST)
-            else:
-                # Colour is applied around the text, never inside a string
-                # that is then padded — an escape sequence has no width on
-                # screen and every width to ljust(), which is what left the
-                # keyboard hints truncated off every unselected row.
-                on = i == sel[0]
-                pad = max(1, cols - 2 - len(label) - len(accel))
-                buf.append((SEL if on else "") + C_FG + " " + label
-                           + " " * pad
-                           + (ACC_ON if on else ACC) + accel + " " + C_RST)
-            buf.append("\033[K\n")
-        # No newline after the last row: one more would scroll the heading
-        # off the top of a window sized exactly to its contents.
-        sys.stdout.write("".join(buf).rstrip("\n"))
-        sys.stdout.flush()
-
-    def run(i):
-        what = items[i][3]
-        if what == ["--terminal"]:
-            subprocess.Popen(["foot", "-c", FOOT_INI], start_new_session=True)
-        elif what == ["--map"]:
-            subprocess.Popen(["sol-map"], start_new_session=True)
-        elif what == ["--help-card"]:
-            subprocess.Popen(["sol-help"], start_new_session=True)
-        elif what == ["--system"]:
-            subprocess.Popen(["sol", "system"], start_new_session=True)
-        else:
-            subprocess.Popen(["sol"] + what, start_new_session=True)
-
-    def step(way):
-        if not live:
-            return
-        k = live.index(sel[0]) if sel[0] in live else 0
-        sel[0] = live[(k + way) % len(live)]
-
-    def view():
-        try:
-            o = d.state()["outputs"][0]
-            return (round(o["camera"][0]), round(o["camera"][1]),
-                    round(o["zoom"], 4))
-        except Exception:
-            return None
-
-    where = view()
-    buf = ""
-    try:
-        paint()
-        while True:
-            r, _, _ = select.select([sys.stdin], [], [], 0.2)
-            if not r:
-                if buf == "\033":                 # a lone Esc
-                    return
-                buf = ""
-                # A menu belongs to the moment it was opened in. If the view
-                # moves under it — a flight, a zoom, anything — it is stale,
-                # and a canvas menu drawn for one zoom is the wrong size at
-                # any other. Menus close when the world moves; so does this.
-                now = view()
-                if now is not None and where is not None and now != where:
-                    return
-                continue
-            try:
-                chunk = os.read(fd, 64).decode("utf-8", "ignore")
-            except OSError:
-                return
-            if not chunk:
-                return
-            buf += chunk
-            while buf:
-                key, rest = next_key(buf)
-                if key is None:
-                    break
-                buf = rest
-                if key == "\033[O":               # focus lost: a click elsewhere
-                    return
-                if key == "\033[I":
-                    continue
-                if key.startswith("\033[<"):
-                    try:
-                        btn, col, row = (int(v) for v in key[3:-1].split(";"))
-                    except ValueError:
-                        continue
-                    i = row - 1
-                    if not (0 <= i < len(items)) or items[i][0] != "item":
-                        continue
-                    if btn in (32, 35):            # motion: follow the pointer
-                        if sel[0] != i:
-                            sel[0] = i
-                            paint()
-                    elif btn == 0 and key.endswith("m"):
-                        run(i)
-                        return
-                    continue
-                if key in ("q", "\033"):
-                    return
-                if key in ("\033[A", "k"):
-                    step(-1)
-                elif key in ("\033[B", "j"):
-                    step(1)
-                elif key in ("\r", "\n"):
-                    run(sel[0])
-                    return
-                paint()
-    finally:
-        if old:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        sys.stdout.write("\033[?1003l\033[?1004l\033[?1006l\033[?25h")
-        sys.stdout.flush()
+        sys.exit("sol menu: sol-menu is not installed")
 
 
 HELP = """

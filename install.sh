@@ -23,6 +23,15 @@ fi
 for c in waybar fuzzel mako; do
   command -v "$c" > /dev/null || warn "optional: '$c' not found — its autostart entry will no-op"
 done
+# The context menu is a layer-shell surface, which is what keeps it the same
+# menu at every zoom — so it needs GTK and gtk-layer-shell. Without them
+# right-click has nothing to open; everything else works.
+python3 - <<'PY' || warn "the ☉ context menu needs python3-gi (GTK 3) and libgtk-layer-shell — right-click will not open without them"
+import ctypes, gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+ctypes.CDLL("libgtk-layer-shell.so.0")
+PY
 
 # ── config ────────────────────────────────────────────────────────────────
 CFG="$HOME/.config/driftwm"
@@ -38,7 +47,7 @@ say "config installed to $CFG"
 
 # ── the sol command ───────────────────────────────────────────────────────
 say "installing sol to /usr/local/bin (sudo)"
-sudo install -m755 bin/sol bin/sol-help bin/sol-map bin/sol-cmd bin/driftwm-up /usr/local/bin/
+sudo install -m755 bin/sol bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd bin/driftwm-up /usr/local/bin/
 # opt-in extras: installed, but nothing starts them until you say so
 sudo install -m755 bin/sol-planetarium bin/sol-spin /usr/local/bin/
 

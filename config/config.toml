@@ -269,42 +269,21 @@ border_color = "#414868"
 border_color_focused = "#414868"
 corner_radius = 14
 
-# The context menu. Deliberately NOT pinned: driftwm places a new window's
-# top-left at the cursor, which is exactly where a menu belongs — and pinning
-# would centre it instead, with no way to move it back. It carries no size
-# here either, because `sol menu` sizes it against the current zoom so the
-# same menu lands on screen whatever altitude you are at.
+# The context menu needs no rule at all. It is not a window on the canvas any
+# more — it is a layer-shell surface, like the bar, so the canvas neither
+# scales it nor decides it is too small to click. It is the same menu, in the
+# same place under your hand, at every zoom. See bin/sol-menu.
+#
+# What it does need is to know where the pointer is, and driftwm's IPC does
+# not say. It does place the first window of a spawn centred on the cursor
+# that started it, so the menu opens a 1x1 window purely to be measured and
+# closes it again. This rule is what makes that measurement cost nothing:
+# invisible, undecorated, and never taking the focus off what you were doing.
 [[window_rules]]
-app_id = "sol-menu"
-decoration = "minimal"
-blur = true
-corner_radius = 8
-border_width = 1
-border_color = "#414868"
-border_color_focused = "#414868"
-shadow = true
-# Born invisible. driftwm centres a new window on the cursor and sol then
-# moves it beside the cursor instead — an animated move, so you would watch
-# the menu slide out from under your pointer every time. It travels at zero
-# opacity and fades in once it has arrived, which is how a menu should
-# appear anyway.
-opacity = 0.0
-
-# The same menu, for when you are too far out for driftwm to let a canvas
-# window take a click (see [zoom] interact_min). Pinned, so it is always its
-# own size and always clickable — and centred, because a pinned window cannot
-# be moved, and because there is no meaningful "here" when the pointer is over
-# the whole solar system.
-[[window_rules]]
-app_id = "sol-menu-far"
-pinned_to_screen = true
-decoration = "minimal"
-blur = true
-corner_radius = 8
-border_width = 1
-border_color = "#414868"
-border_color_focused = "#414868"
-shadow = true
+app_id = "sol-probe"
+size = [1, 1]
+decoration = "none"
+focus_on_open = false
 opacity = 0.0
 
 # The command line, sitting just above the footer it belongs to.

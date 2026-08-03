@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""sol-menu — the context menu, in the coordinate space a menu belongs in.
+
+A context menu is a screen-space object. It is the size it is, wherever the
+camera happens to be; it opens at the pointer; it closes when you click away.
+The old one was a terminal window on the canvas, which is none of those things
+by default, and every one of them had to be bought back: its font divided by
+the zoom so it would not grow, a fade to hide the animated move into place, a
+pinned twin for the altitudes where driftwm stops delivering clicks to canvas
+windows at all. Four fixes deep, it was still a different menu at every zoom.
+
+So this one is not a canvas window. It is a layer-shell surface on the overlay
+layer — the same kind of surface waybar and fuzzel use — which the canvas
+neither scales nor swallows clicks for. There is no zoom arithmetic anywhere
+in this file, no pinned fallback, and nothing to undo: it is one menu, the
+same size and in the same place relative to your hand, at 7% and at 100%.
+
+What that costs is knowing where the pointer is, because a layer surface is
+not told. driftwm has no IPC for the cursor, and a surface that maps under a
+motionless pointer is sent no enter event to learn from (measured, not
+assumed). But driftwm centres the first window of a spawn on the cursor that
+started it — so the menu opens a 1x1 window nobody can see, reads back where
+the compositor put it, and closes it again. That is the same trick the old
+menu ran on itself; the difference is that the thing being measured is no
+longer the thing being shown, which is what frees the menu from the canvas.
+
+And because the pointer is now known as a point rather than inferred from the
+camera, the menu can answer for what is under it. Right-click Jupiter from the
+whole-system view and the menu says Jupiter — its windows, its tidy, its step
+— instead of shrugging at "the system" because the camera was over the Sun.
+"""
+
+import ctypes
+import importlib.machinery
+import importlib.util
+import math
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk           # noqa: E402
+
+
+# ── sol itself ────────────────────────────────────────────────────────────
+# The places, the districts and the census live in `sol`, and there must be
+# one copy of them. It is a script rather than a module, so it is loaded as
+# one — preferring the copy beside this file, so a working tree tests itself
+# rather than whatever is installed.
+def load_sol():
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol")
+    path = here if os.path.exists(here) else (shutil.which("sol") or here)
+    loader = importlib.machinery.SourceFileLoader("sol", path)
+    spec = importlib.util.spec_from_loader("sol", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+sol = load_sol()
+
+
+# ── gtk-layer-shell ───────────────────────────────────────────────────────
+# Called through ctypes rather than gobject-introspection: Debian ships the
+# library but not the typelib, and the six functions needed here take a
+# GtkWindow and an int. PyGObject hands out the underlying pointer through
+# the __gpointer__ capsule, which is all the binding there is to do.
+LAYER_OVERLAY = 3
+EDGES = (0, 1, 2, 3)                    # left, right, top, bottom
+KEYBOARD_EXCLUSIVE = 1
+
+try:
+    _shell = ctypes.CDLL("libgtk-layer-shell.so.0")
+except OSError:
+    sys.exit("sol-menu: libgtk-layer-shell is not installed")
+
+ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+
+
+def gpointer(obj):
+    return ctypes.c_void_p(
+        ctypes.pythonapi.PyCapsule_GetPointer(obj.__gpointer__, None))
+
+
+def make_overlay(win):
+    """Turn a GtkWindow into a full-screen, click-through-to-nothing overlay.
+
+    Anchored to all four edges, so it covers the output and every click lands
+    on it — which is exactly what a menu grab is: the clicks that miss the
+    menu are the ones that dismiss it, and they must not also reach whatever
+    was underneath. An exclusive zone of -1 keeps it over the bar rather than
+    being pushed below it.
+    """
+    p = gpointer(win)
+    _shell.gtk_layer_init_for_window(p)
+    _shell.gtk_layer_set_namespace(p, b"sol-menu")
+    _shell.gtk_layer_set_layer(p, LAYER_OVERLAY)
+    _shell.gtk_layer_set_keyboard_mode(p, KEYBOARD_EXCLUSIVE)
+    for edge in EDGES:
+        _shell.gtk_layer_set_anchor(p, edge, 1)
+    _shell.gtk_layer_set_exclusive_zone(p, -1)
+
+
+# ── Where the pointer is ──────────────────────────────────────────────────
+PROBE = "sol-probe"
+
+
+class Probe:
+    """A 1x1 window opened only to be measured, and closed once it has been.
+
+    driftwm centres it on the cursor that spawned the menu, so its position
+    *is* the pointer, in canvas coordinates, at any zoom — placement is not
+    pointer input, so `interact_min` has no opinion about it.
+
+    A window exists before it is placed: it arrives at 0x0, is configured, and
+    is moved into place. Reading it in that gap gives the origin rather than
+    the cursor, so a sample only counts once the window has a size and has
+    stopped moving between two reads.
+    """
+
+    def __init__(self, drift, on_done):
+        self.d, self.on_done = drift, on_done
+        self.seen, self.deadline = None, time.monotonic() + 0.6
+        self.win = Gtk.Window(title=PROBE)
+        self.win.set_default_size(1, 1)
+        self.win.set_decorated(False)
+        Gtk.Widget.set_opacity(self.win, 0.0)    # the widget's, not the
+        self.win.show()                          # deprecated window's
+        GLib.timeout_add(8, self.poll)
+
+    def find(self):
+        for w in self.d.state().get("windows", []):
+            if w.get("app_id") == PROBE or w.get("title") == PROBE:
+                return w
+        return None
+
+    def poll(self):
+        try:
+            me = self.find()
+        except Exception:
+            me = None
+        if me and me["size"][0] > 0 and me["size"][1] > 0:
+            at = tuple(me["position"])
+            if at == self.seen:
+                return self.finish(at)
+            self.seen = at
+        if time.monotonic() > self.deadline:
+            return self.finish(None)
+        return True
+
+    def finish(self, at):
+        self.win.destroy()
+        self.on_done(at)
+        return False
+
+
+def to_screen(out, at):
+    """A canvas point in screen pixels, for the output the pointer is on."""
+    cx, cy = out["camera"]
+    z = out["zoom"] or 1.0
+    ow, oh = out["size"]
+    return ow / 2.0 + (at[0] - cx) * z, oh / 2.0 - (at[1] - cy) * z
+
+
+# ── What the menu says ────────────────────────────────────────────────────
+def build(st, out, at):
+    """The rows of the menu, for the place under the pointer.
+
+    `at` is None when the menu was opened by something other than a click on
+    the canvas — the ☉ button in the bar, say — in which case there is no
+    pointer to be at and the camera answers for where you are, as it used to.
+    """
+    zoom = out["zoom"] or 1.0
+    if at is None:
+        here, on_it, n = sol.whereabouts(st, out["camera"], zoom)
+        here = here if on_it else None
+        standing = True
+    else:
+        here, n = sol.place_under(st, at, zoom)
+        where, on_it, _ = sol.whereabouts(st, out["camera"], zoom)
+        standing = here is not None and on_it and where is here
+    return sol.menu_items(here, n, standing), here
+
+
+# ── The menu ──────────────────────────────────────────────────────────────
+# A GtkEventBox draws a CSS background but does not honour CSS padding, so
+# the rows carry their background and the boxes inside them carry the inset.
+# Getting that the wrong way round puts the keyboard hints under the border.
+CSS = b"""
+window { background-color: transparent; }
+.card {
+  background-color: alpha(#1a1b26, 0.97);
+  border: 1px solid #414868;
+  border-radius: 8px;
+  padding: 6px 0;
+  margin: %(pad)dpx;
+  box-shadow: 0 10px 28px alpha(black, 0.5);
+  font-family: "JetBrains Mono"; font-size: 11pt;
+}
+.title   { color: %(tint)s; padding: 4px 15px 6px 15px; }
+.line    { padding: 4px 15px; }
+.row.on  { background-color: #283457; }
+.label   { color: #c0caf5; }
+.accel   { color: #565f89; margin-left: 34px; }
+.row.on .accel { color: #8a94ba; }
+.rule    { background-color: #292e42; margin: 5px 11px; min-height: 1px; }
+"""
+
+GAP = 2             # between the pointer and the corner it hangs from
+EDGE = 8            # nearest the menu comes to the side of the screen
+TOP = 36            # ... and to the bar along the top
+BOTTOM = 34         # ... and the footer along the bottom
+# Room around the card for its shadow to fall in. GTK clips a box-shadow to
+# the widget's allocation, so the card asks for a margin and the placement
+# takes it back off again — what lands at the pointer is the border, not the
+# invisible edge of the shadow.
+SHADOW = 26
+
+
+class Menu:
+    def __init__(self):
+        self.d = sol.Drift()
+        self.st = self.d.state()
+        self.out = sol.active_output(self.st)
+        self.rows, self.sel, self.done = [], -1, False
+
+        self.win = Gtk.Window()
+        self.win.set_app_paintable(True)
+        screen = self.win.get_screen()
+        self.win.set_visual(screen.get_rgba_visual() or screen.get_system_visual())
+        make_overlay(self.win)
+        self.fixed = Gtk.Fixed()
+        self.win.add(self.fixed)
+
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.win.connect("button-press-event", self.clicked_away)
+        self.win.connect("key-press-event", self.key)
+        self.win.connect("destroy", lambda *_: Gtk.main_quit())
+
+        self.watch = (self.out["camera"], round(self.out["zoom"], 4))
+        GLib.timeout_add(200, self.moved)
+
+    # ── laying it out ────────────────────────────────────────────────────
+    def card(self, items, here):
+        colour = (here.colour if here is not None else "#bb9af7")
+        style = Gtk.CssProvider()
+        style.load_from_data(CSS % {b"tint": colour.encode(), b"pad": SHADOW})
+        Gtk.StyleContext.add_provider_for_screen(
+            self.win.get_screen(), style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.get_style_context().add_class("card")
+        for i, (kind, label, accel, action) in enumerate(items):
+            if kind == "sep":
+                rule = Gtk.Box()
+                rule.get_style_context().add_class("rule")
+                box.pack_start(rule, False, False, 0)
+            elif kind == "title":
+                cap = Gtk.Label(label=label, xalign=0.0)
+                cap.get_style_context().add_class("title")
+                box.pack_start(cap, False, False, 0)
+            else:
+                box.pack_start(self.row(label, accel, action), False, False, 0)
+        return box
+
+    def row(self, label, accel, action):
+        """One line: what it does on the left, how to do it by hand on the right.
+
+        An EventBox rather than a button, because a menu row is not a button:
+        it lights up as the pointer crosses it and fires on the way out of the
+        menu, and the selection follows the pointer so that the keyboard and
+        the hand never disagree about which row is current.
+        """
+        line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        line.get_style_context().add_class("line")
+        left = Gtk.Label(label=label, xalign=0.0)
+        left.get_style_context().add_class("label")
+        right = Gtk.Label(label=accel, xalign=1.0)
+        right.get_style_context().add_class("accel")
+        line.pack_start(left, False, False, 0)
+        line.pack_end(right, False, False, 0)
+
+        idx = len(self.rows)
+        ev = Gtk.EventBox()
+        ev.get_style_context().add_class("row")
+        ev.add(line)
+        ev.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
+        ev.connect("enter-notify-event", lambda *_: self.highlight(idx))
+        ev.connect("button-press-event", lambda *_: self.run(idx))
+        self.rows.append((ev, action))
+        return ev
+
+    def place(self, at):
+        """Hang the menu's corner off the pointer, and unfold it into the room.
+
+        Down and to the right, which is where a menu opens, so the point you
+        clicked stays visible. Against an edge it opens the other way instead
+        — up, or left, or both — so a menu in the corner of the screen still
+        shows all of itself.
+        """
+        ow, oh = self.out["size"]
+        want = self.body.get_preferred_size()[1]
+        w, h = want.width - 2 * SHADOW, want.height - 2 * SHADOW
+        if at is None:
+            left, top = (ow - w) / 2.0, (oh - h) / 2.0
+        else:
+            px, py = to_screen(self.out, at)
+            left = px + GAP if px + GAP + w <= ow - EDGE else px - GAP - w
+            top = py + GAP if py + GAP + h <= oh - BOTTOM else py - GAP - h
+            left = max(EDGE, min(left, ow - EDGE - w))
+            top = max(TOP, min(top, oh - BOTTOM - h))
+        self.fixed.move(self.body, int(left) - SHADOW, int(top) - SHADOW)
+
+    def show(self, at):
+        items, here = build(self.st, self.out, at)
+        self.body = self.card(items, here)
+        self.body.set_opacity(0.0)      # nothing is shown until it is placed
+        self.fixed.put(self.body, 0, 0)
+        self.win.show_all()
+        self.place(at)
+        self.fade()
+
+    def fade(self, ms=110, steps=11):
+        """Arrive, rather than be switched on.
+
+        Eased out over a tenth of a second: a menu that fades at a constant
+        rate reads as a light being turned up, and one that arrives quickly
+        and settles reads as a menu.
+        """
+        state = {"i": 0}
+
+        def step():
+            state["i"] += 1
+            t = state["i"] / float(steps)
+            self.body.set_opacity(math.sin(t * math.pi / 2.0))
+            return state["i"] < steps
+        GLib.timeout_add(int(ms / steps), step)
+
+    # ── using it ─────────────────────────────────────────────────────────
+    def highlight(self, i):
+        if not self.rows:
+            return
+        i %= len(self.rows)
+        for k, (ev, _) in enumerate(self.rows):
+            ctx = ev.get_style_context()
+            if k == i:
+                ctx.add_class("on")
+            else:
+                ctx.remove_class("on")
+        self.sel = i
+
+    def run(self, i):
+        # Nothing is chosen until something is: the menu opens with no row
+        # selected, the way a menu does, so `enter` before any hover or arrow
+        # key has nothing to act on and must not quietly pick the last row.
+        if self.done or not self.rows or not 0 <= i < len(self.rows):
+            return True
+        self.done = True                 # a menu answers once
+        action = self.rows[i][1]
+        self.win.hide()                  # gone before what it starts appears
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+        if action:
+            subprocess.Popen(action, start_new_session=True)
+        Gtk.main_quit()
+        return True
+
+    def clicked_away(self, _w, _ev):
+        """A click that misses the menu is what closes it — as it always has been.
+
+        The rows handle their own clicks and stop them here, so anything that
+        reaches the overlay landed outside the card.
+        """
+        Gtk.main_quit()
+        return True
+
+    def key(self, _w, ev):
+        name = Gdk.keyval_name(ev.keyval) or ""
+        if name in ("Escape", "q"):
+            Gtk.main_quit()
+        elif name in ("Down", "n", "j", "Tab"):
+            self.highlight(self.sel + 1 if self.sel >= 0 else 0)
+        elif name in ("Up", "p", "k", "ISO_Left_Tab"):
+            self.highlight(self.sel - 1 if self.sel >= 0 else -1)
+        elif name in ("Return", "KP_Enter", "space"):
+            self.run(self.sel)
+        return True
+
+    def moved(self):
+        """A menu belongs to the moment it was opened in.
+
+        It is drawn for the place that was under the pointer, and a flight or
+        a zoom leaves it describing somewhere you are no longer looking at.
+        Nothing breaks the way it used to — this menu stays the size it is —
+        but a stale menu is still stale, so the world moving closes it.
+        """
+        if self.done:
+            return False
+        try:
+            out = sol.active_output(self.d.state())
+            now = (out["camera"], round(out["zoom"], 4))
+        except Exception:
+            return True
+        if now != self.watch:
+            Gtk.main_quit()
+            return False
+        return True
+
+
+def close_any_other():
+    """Never two menus. `pkill` cannot be used: this process matches the
+    pattern as surely as the one it means to close."""
+    mine = os.getpid()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == mine:
+            continue
+        try:
+            with open("/proc/%s/cmdline" % entry, "rb") as f:
+                argv = f.read().split(b"\0")
+        except OSError:
+            continue
+        if any(a.endswith(b"sol-menu") for a in argv):
+            try:
+                os.kill(int(entry), 15)
+            except OSError:
+                pass
+
+
+def main():
+    # A second menu never stacks on the first: the click that would open it
+    # dismisses the one already up, which is what a menu grab means.
+    close_any_other()
+    GLib.set_prgname(PROBE)      # the app_id the probe window is matched by
+    menu = Menu()
+    Probe(menu.d, menu.show)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

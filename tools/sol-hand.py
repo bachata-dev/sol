@@ -15,6 +15,7 @@ tell the difference, which is the point.
     sudo tools/sol-hand.py swipe 4 left             # four fingers, travelling
     sudo tools/sol-hand.py pinch out 4              # spreading / gathering
     sudo tools/sol-hand.py hold 4                   # resting, then lifting
+    sudo tools/sol-hand.py key down down enter      # keys, for driving a menu
     sudo tools/sol-hand.py script                   # the same verbs, one per line
     sudo tools/sol-hand.py probe 30                 # create both, hold, report
 
@@ -135,8 +136,13 @@ def keyboard():
     device is a keyboard by which keys it carries, and a device that can
     press only KEY_LEFTALT is not enough of a keyboard to count. Its alt
     then never reaches the seat, and the grab never starts.
+
+    Through 127 rather than 89, because the arrow keys live at 103-108 and a
+    key a device never declared is dropped by the kernel, not by anything
+    you can see: esc and enter arrived, the arrows silently did not, and the
+    menu looked broken when it was the hand that could not reach the keys.
     """
-    return Hand("sol hand (keyboard)", keys=tuple(range(1, 90)))
+    return Hand("sol hand (keyboard)", keys=tuple(range(1, 128)))
 
 
 def touchpad():
@@ -174,6 +180,31 @@ def wheel(d, notches):
         d.emit(EV_REL, REL_WHEEL, step)
         d.syn()
         time.sleep(0.05)
+
+
+# ── the keyboard's verbs ──────────────────────────────────────────────────
+# Enough of a keyboard to drive a menu. The hand could always hold alt for a
+# drag; it could not press esc, which is the only way to find out whether a
+# surface that asks for the keyboard is actually given it.
+KEYS = {"esc": 1, "escape": 1, "tab": 15, "enter": 28, "return": 28,
+        "space": 57, "up": 103, "down": 108, "left": 105, "right": 106,
+        "j": 36, "k": 37, "q": 16, "n": 49, "p": 25,
+        "0": 11, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "7": 8,
+        "8": 9, "9": 10}
+
+
+def key(d, *names):
+    for name in names:
+        code = KEYS.get(str(name).lower())
+        if code is None:
+            raise SystemExit("sol-hand key: unknown key %r (have: %s)"
+                             % (name, " ".join(sorted(KEYS))))
+        d.emit(EV_KEY, code, 1)
+        d.syn()
+        time.sleep(0.04)
+        d.emit(EV_KEY, code, 0)
+        d.syn()
+        time.sleep(0.08)
 
 
 def drag(d, x0, y0, x1, y1, ms=700, kbd=None, rel=None):
@@ -332,6 +363,7 @@ def hold(d, n=4, ms=600):
 # ── entry ─────────────────────────────────────────────────────────────────
 MOUSE_VERBS = {"point", "click", "drag", "wheel"}
 PAD_VERBS = {"swipe", "pinch", "hold"}
+KEY_VERBS = {"key"}
 
 
 def run(dev, verb, a):
@@ -356,6 +388,8 @@ def run(dev, verb, a):
         pinch(dev, a[0], int(a[1]) if len(a) > 1 else 4)
     elif verb == "hold":
         hold(dev, int(a[0]) if a else 4)
+    elif verb == "key":
+        key(dev, *a)
 
 
 def main():
@@ -400,6 +434,9 @@ def main():
             elif words[0] in PAD_VERBS:
                 p = p or touchpad()
                 run(p, words[0], words[1:])
+            elif words[0] in KEY_VERBS:
+                k = k or keyboard()
+                run(k, words[0], words[1:])
             elif words[0] in ("altdown", "altup"):
                 k = k or keyboard()
                 k.emit(EV_KEY, KEY_LEFTALT, 1 if words[0] == "altdown" else 0)
@@ -426,6 +463,8 @@ def main():
         dev = mouse()
     elif verb in PAD_VERBS:
         dev = touchpad()
+    elif verb in KEY_VERBS:
+        dev = keyboard()
     else:
         sys.exit("sol-hand: unknown verb '%s'" % verb)
     run(dev, verb, args[1:])

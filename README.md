@@ -92,14 +92,17 @@ On a mouse, every click borrows a habit you already have, and does what that hab
 - **The numbers in the bar are buttons.** Click `③` and you are on Earth — the same gesture as
   clicking a workspace number in any bar since i3. This is where "click to switch" has always
   lived, so it is the only place a plain click means travel.
-- **Right-click the sky acts on what is here**, as right-click has since desktops began: tidy this
-  planet, step through its windows, *new terminal here* — the oldest right-click item there is, and
-  since new windows land under the cursor, "here" is exactly where you clicked. Travel sits behind
-  one labelled door, "Go to a planet…", instead of being what the menu is. It **opens down and to
-  the right of the pointer**, **flips up or left** rather than hang off an edge, and **closes when
-  you click away** — the three things that make a context menu one, and the three a launcher cannot
-  do. Each item carries its keyboard equivalent down the right, the way a menu teaches you to stop
-  needing it.
+- **Right-click acts on what is under the pointer**, as right-click has since desktops began: tidy
+  this planet, step through its windows, *new terminal here* — the oldest right-click item there is,
+  and since new windows land under the cursor, "here" is exactly where you clicked. Travel sits
+  behind one labelled door, "Go to a planet…", instead of being what the menu is. It **opens down
+  and to the right of the pointer**, **flips up or left** rather than hang off an edge, and
+  **closes when you click away** — the three things that make a context menu one, and the three a
+  launcher cannot do. Each item carries its keyboard equivalent down the right, the way a menu
+  teaches you to stop needing it.
+- **It is the same menu at every zoom, and it answers for what you pointed at.** Right-click Jupiter
+  from the whole-system view and the menu says Jupiter — its windows, its tidy, its step, and *Go to
+  Jupiter* first — at the size it always is, under your hand, where you clicked.
 - **Middle-click the sky opens the overview** — middle-on-the-root has meant the window list since
   X11 had root menus, and the overview is the window list.
 - **On a window, sol binds nothing without a modifier.** Middle-click is paste and stays paste;
@@ -230,35 +233,38 @@ context menu for wherever you are standing — tidy it, step through it, open a 
 travel behind one labelled "Go to a planet…" item. `mod+tab` skips straight to that switcher:
 every place, what it holds, type to filter.
 
-The context menu is a window of sol's own rather than a launcher, because a launcher cannot behave
-like a menu: it opens in the middle of the screen and holds an exclusive keyboard grab, so only
-`esc` ever closes it. This one opens with its corner at the pointer — driftwm places a new window's
-top-left at the cursor, which is exactly where a menu belongs — flips up or left when it would hang
-off an edge, and closes the moment focus goes elsewhere, which is what clicking away produces. It is
-a canvas window, so it is drawn at whatever zoom you are at; its size and font are divided by that
-zoom, and the same menu lands on screen whether you are at working zoom or looking at the whole
-system.
+The menu is **not a window on the canvas**. It was one, and everything that is true of a menu had to
+be bought back one fix at a time: its font divided by the zoom so it would not grow, a fade to hide
+the animated move into place, a pinned twin for the altitudes where driftwm stops delivering clicks
+to canvas windows at all. Four fixes deep it was still a different menu at every zoom — because a
+menu is a screen-space object and the canvas is not screen space.
 
-driftwm centres a new window on the cursor, which is right for a window and wrong for a menu — so
-sol reads that centre back (it is where you clicked) and moves the menu so its corner sits there
-instead. It waits for the window to be configured before doing so: a window exists at 0×0 for a
-moment before it is placed, and moving it in that gap moves nothing at all.
+So `sol-menu` is a **layer-shell surface**, the same kind of surface the bar is, which the canvas
+neither scales nor swallows clicks for. There is no zoom arithmetic left in it, no pinned fallback
+and nothing to undo: one menu, the same size and in the same place relative to your hand, at 7% and
+at 100%. It flips up or left rather than hang off an edge, closes when you click away — a
+full-screen transparent overlay is what a menu grab is — and fades in over a tenth of a second where
+it landed.
 
-That move is animated, which would mean watching the menu slide out from under your pointer every
-time you opened it. So it is **born invisible** — `opacity = 0.0` in its window rule — travels while
-nothing can see it, and fades in over a tenth of a second once it has arrived. What you see is a
-menu appearing beside the cursor, which is all you should ever have seen.
+What that costs is knowing where the pointer is, because a layer surface is not told. driftwm has no
+IPC for the cursor, and a surface that maps under a motionless pointer is sent no enter event to
+learn from. But driftwm centres the first window of a spawn on the cursor that started it — so the
+menu opens a **1×1 window nobody can see**, reads back where the compositor put it, and closes it
+again. That is the same trick the old menu ran on itself; the difference is that the thing being
+measured is no longer the thing being shown, which is what frees the menu from the canvas.
 
-It also **closes when the view moves**. A menu belongs to the moment it was opened in, and a canvas
-menu drawn for one zoom is the wrong size at any other — so a flight, a zoom, anything that moves
-the world under it, dismisses it.
+And because the pointer is now known as a point rather than inferred from the camera, the menu can
+answer for what is under it. Right-click Jupiter from the whole-system view and the menu says
+Jupiter — *Go to Jupiter*, tidy it, step through its windows — instead of shrugging at "the system"
+because the camera was over the Sun. Point at the sky between the orbits and it is the system again,
+because that is what you pointed at.
 
-Below `interact_min` — the zoom at which driftwm decides a canvas window is too small to touch, and
-turns a click into "fly to that window" — a canvas menu would open and then refuse every click. That
-threshold is what makes click-to-fly and clicking a name plate work from far out, so it stays. Down
-there the menu is a **pinned** window instead: always its own size, always clickable, and centred,
-because pinned windows cannot be moved and because there is not much "here" to point at when the
-pointer is over a whole solar system.
+It still **closes when the view moves**: a menu belongs to the moment it was opened in, and one
+drawn for the place under your pointer is stale once you have flown somewhere else.
+
+`interact_min` — the zoom at which driftwm decides a canvas window is too small to touch, and turns
+a click into "fly to that window" — is untouched at 0.45. It is what makes click-to-fly and clicking
+a name plate work from far out, and the menu no longer has an opinion about it either way.
 
 ![the menu](screenshots/menu.png)
 
@@ -302,7 +308,9 @@ sudo driftwm-up          # defaults to VT 3
 ```
 
 **Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
-optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono plus a Nerd Font for the bar glyphs.
+`python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu — without them right-click has
+nothing to open and everything else works; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
+plus a Nerd Font for the bar glyphs.
 [Omarchy](https://omarchy.org) keybindings light up automatically if omarchy is installed, and are
 harmless if not.
 
@@ -354,13 +362,14 @@ Nothing below runs unless you turn it on, because each one moves the camera with
   file is not enough on its own: press `mod+shift+c` to reload the config and the shader comes with
   it. The only lines `sol` ever writes are the district rectangles between the two `── districts ──`
   markers; delete the markers and you simply get no cards.
-- **The bar and the menu** — `waybar.jsonc` and `waybar.css` for the bar, `fuzzel.ini` for the ☉
-  menu. Only `sol menu` reads that fuzzel config, so your own stays untouched; delete it and the
-  menu falls back to whatever fuzzel already does.
+- **The bar and the menu** — `waybar.jsonc` and `waybar.css` for the bar. The context menu is
+  `bin/sol-menu`, and its whole appearance is the CSS block at the top of that file. `fuzzel.ini`
+  styles the *switcher* (`mod+tab`) only; delete it and that falls back to whatever fuzzel already
+  does.
 - **No trackpad?** — `tools/sol-hand.py` is an emulated hand: an absolute mouse, a relative mouse, a
   four-finger touchpad and a keyboard, all through `/dev/uinput`, real enough that libinput runs its
-  actual gesture engine over them. Every swipe, pinch, click and drag above was verified with it,
-  over SSH, before it ever met a physical hand.
+  actual gesture engine over them. Every swipe, pinch, click, drag and keypress above was verified
+  with it, over SSH, before it ever met a physical hand.
 
 ## What's real, and what isn't
 
