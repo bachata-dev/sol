@@ -112,7 +112,7 @@ PROBE = "sol-probe"
 
 
 class Probe:
-    """A 1x1 window opened only to be measured, and closed once it has been.
+    """A 1x1 window opened to be measured, and closed to hand over the pointer.
 
     driftwm centres it on the cursor that spawned the menu, so its position
     *is* the pointer, in canvas coordinates, at any zoom — placement is not
@@ -122,6 +122,18 @@ class Probe:
     is moved into place. Reading it in that gap gives the origin rather than
     the cursor, so a sample only counts once the window has a size and has
     stopped moving between two reads.
+
+    Closing it does the second job, and the order matters. driftwm decides
+    which surface holds the pointer when it re-evaluates what is under the
+    cursor, and mapping a surface is not an occasion to re-evaluate: an
+    overlay that appears under a motionless pointer is simply not given the
+    pointer, and the first click sails past it to the canvas. Which is to say
+    the menu could not be clicked or dismissed by anyone who had not moved
+    the mouse since opening it — a tap-to-click trackpad, exactly.
+
+    A window *closing* under the cursor is an occasion to re-evaluate. So the
+    probe is closed after the menu is up, not before, and driftwm looks
+    again, finds the overlay, and sends it the pointer where it actually is.
     """
 
     def __init__(self, drift, on_done):
@@ -155,8 +167,14 @@ class Probe:
         return True
 
     def finish(self, at):
-        self.win.destroy()
         self.on_done(at)
+        # Long enough for the overlay's first commit to reach the compositor,
+        # so that when it looks again there is something new to find.
+        GLib.timeout_add(80, self.close)
+        return False
+
+    def close(self):
+        self.win.destroy()
         return False
 
 
@@ -243,7 +261,7 @@ class Menu:
         self.win.connect("key-press-event", self.key)
         self.win.connect("destroy", lambda *_: Gtk.main_quit())
 
-        self.watch = (self.out["camera"], round(self.out["zoom"], 4))
+        self.watch = (tuple(self.out["camera"]), self.out["zoom"])
         GLib.timeout_add(200, self.moved)
 
     # ── laying it out ────────────────────────────────────────────────────
@@ -399,15 +417,23 @@ class Menu:
         a zoom leaves it describing somewhere you are no longer looking at.
         Nothing breaks the way it used to — this menu stays the size it is —
         but a stale menu is still stale, so the world moving closes it.
+
+        Judged with a tolerance, not by equality. The camera is a pair of
+        floats with drift on it, and it keeps settling in ten-thousandths
+        long after a flight has visibly ended — compared exactly, that reads
+        as "the world moved" and the menu shuts itself the moment it opens.
+        A canvas unit and a thousandth of zoom are below noticing, and every
+        real flight crosses both by orders of magnitude.
         """
         if self.done:
             return False
         try:
             out = sol.active_output(self.d.state())
-            now = (out["camera"], round(out["zoom"], 4))
+            (cx, cy), z = out["camera"], out["zoom"]
         except Exception:
             return True
-        if now != self.watch:
+        (wx, wy), wz = self.watch
+        if abs(cx - wx) > 1.0 or abs(cy - wy) > 1.0 or abs(z - wz) > 0.001:
             Gtk.main_quit()
             return False
         return True
