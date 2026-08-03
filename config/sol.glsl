@@ -100,6 +100,29 @@ float noise(vec2 p) {
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
+// A star is not white. Most are near-white, the hot few run blue, and the
+// old ones run orange — the same three families a dark-sky photograph shows.
+vec3 star_tint(float h) {
+    if (h > 0.86) return vec3(0.64, 0.72, 1.00);       // the hot blue few
+    if (h < 0.16) return vec3(1.00, 0.82, 0.62);       // the old orange few
+    return vec3(0.78, 0.82, 0.97);                     // everyone else
+}
+
+// One layer of stars: a sparse grid, each cell holding at most one, offset
+// inside its cell so no row ever reads. `par` is how much of the camera the
+// layer follows — smaller is deeper, which is all parallax is.
+vec3 stars(vec2 screen, float par, float cellpx, float amt, float t) {
+    vec2 sp = (screen + u_camera * par) / cellpx;
+    vec2 cell = floor(sp);
+    float h = hash(cell);
+    if (h <= 0.93) return vec3(0.0);
+    vec2 fp = fract(sp) - 0.5;
+    vec2 off = vec2(hash(cell + 1.3), hash(cell + 2.7)) - 0.5;
+    float tw = 0.72 + 0.28 * sin(t * (0.3 + h) + h * 40.0);
+    float pt = 1.0 - smoothstep(0.02, 0.07, length(fp - off * 0.6));
+    return star_tint(hash(cell + 7.7)) * pt * tw * amt;
+}
+
 // Distance from a point to an orbit ellipse. The gradient of the ellipse
 // equation turns "inside / outside" into a length, which is exact enough
 // within a few pixels of the curve — all a hairline needs.
@@ -168,12 +191,24 @@ float rrect(vec2 p, vec2 ext, float rad) {
 // painted behind its windows so a workspace reads as a place rather than a
 // heap of rectangles. `sol arrange` writes the rectangles; a zero-width one
 // means that planet is holding nothing and nothing is drawn.
-vec3 card(vec2 c, vec4 d, vec3 tint, float uf) {
+//
+// `here` lifts the card the camera is standing in. It is not decoration —
+// the camera position is stateful truth the shader already receives, and
+// "the lights are on where you are" is how a district reads as the room
+// you are in rather than one more rectangle in the dark.
+vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here) {
     if (d.z < 1.0) return vec3(0.0);
     float s = rrect(c - d.xy, d.zw, 110.0);
     float fill = 1.0 - smoothstep(-3.0, 3.0, s);
     float rim  = exp(-abs(s) / 34.0);
-    return tint * (fill * 0.05 + rim * 0.14) * (0.40 + 0.60 * uf);
+    return tint * (fill * 0.05 + rim * 0.14) * (0.40 + 0.60 * uf) * (1.0 + here * 0.9);
+}
+
+// Is a point inside a district's rectangle? 1.0 or 0.0.
+float inside(vec2 p, vec4 d) {
+    if (d.z < 1.0) return 0.0;
+    vec2 q = abs(p - d.xy) - d.zw;
+    return step(max(q.x, q.y), 0.0);
 }
 
 void main() {
@@ -186,16 +221,23 @@ void main() {
 
     vec3 col = mix(SPACE_TOP, SPACE_BOT, v_coords.y);
 
-    // Starfield, parallaxed so panning feels like moving through depth
-    vec2 sp = (screen + u_camera * 0.12) / 90.0;
-    vec2 cell = floor(sp);
-    float h = hash(cell);
-    if (h > 0.93) {
-        vec2 fp = fract(sp) - 0.5;
-        vec2 off = vec2(hash(cell + 1.3), hash(cell + 2.7)) - 0.5;
-        float tw = 0.6 + 0.4 * sin(u_time * (0.4 + h) + h * 40.0);
-        col += STARLIGHT * (1.0 - smoothstep(0.02, 0.07, length(fp - off * 0.6))) * tw * 0.32;
-    }
+    // The Milky Way, on the deepest layer there is. The galactic plane
+    // really does cross the ecliptic at about 60°, and the Sun really does
+    // sit in it — so the band runs through the origin at that angle, made
+    // of cloud rather than a line, and barely follows the camera at all,
+    // because the galaxy is the one thing here that is genuinely far away.
+    vec2 mw = screen + u_camera * 0.03;
+    float d_mw = dot(mw, vec2(-0.868, 0.496));
+    float band_mw = exp(-d_mw * d_mw / (2.0 * 900.0 * 900.0));
+    float wisp = noise(mw * 0.0016) * 0.65 + noise(mw * 0.004) * 0.35;
+    col += vec3(0.72, 0.76, 0.92) * band_mw * (0.20 + 0.55 * wisp) * 0.045;
+
+    // Starfield in three depths, so panning moves through the sky rather
+    // than past a painted one. The near layer keeps the brightness the old
+    // single layer had; the two behind it only deepen the field.
+    col += stars(screen, 0.26, 62.0, 0.30, u_time);
+    col += stars(screen, 0.12, 90.0, 0.26, u_time);
+    col += stars(screen, 0.05, 130.0, 0.18, u_time);
 
     float r = length(c);
 
@@ -211,10 +253,15 @@ void main() {
                 + orbit_line(orbit_dist(c, O8, R8), px);
     col += ORBIT_COL * rings * (0.035 + uf * 0.10);
 
-    // District cards, over the orbit lines and under everything else
-    col += card(c, D0, C0, uf) + card(c, D1, C1, uf) + card(c, D2, C2, uf)
-         + card(c, D3, C3, uf) + card(c, D4, C4, uf) + card(c, D5, C5, uf)
-         + card(c, D6, C6, uf) + card(c, D7, C7, uf) + card(c, D8, C8, uf);
+    // District cards, over the orbit lines and under everything else. The
+    // card the camera is inside of is lifted: you can see which room you
+    // are in from the light being on.
+    vec2 cam = u_camera + size * 0.5;
+    col += card(c, D0, C0, uf, inside(cam, D0)) + card(c, D1, C1, uf, inside(cam, D1))
+         + card(c, D2, C2, uf, inside(cam, D2)) + card(c, D3, C3, uf, inside(cam, D3))
+         + card(c, D4, C4, uf, inside(cam, D4)) + card(c, D5, C5, uf, inside(cam, D5))
+         + card(c, D6, C6, uf, inside(cam, D6)) + card(c, D7, C7, uf, inside(cam, D7))
+         + card(c, D8, C8, uf, inside(cam, D8));
 
     // Asteroid belt — a sparse annulus dividing the inner and outer system
     float band = 1.0 - smoothstep(90.0, 210.0, abs(r - BELT_R));
@@ -280,10 +327,37 @@ void main() {
     col += planet(c, P7, 166.0, C7, bloom, 0.03, 0.00);   // Uranus, smooth
     col += planet(c, P8, 165.0, C8, bloom, 0.05, 0.03);   // Neptune, faint bands
 
-    // Saturn's ring, at the real 2.35 planet radii of the A ring's outer edge
+    // Saturn's rings as they are: the broad bright B ring, the Cassini
+    // division, then the A ring — at their real extents in planet radii
+    // (B spans 1.53–1.95, A spans 2.03–2.27), squashed to the tilt the
+    // system is viewed at. Never over the disc: seen from above the plane,
+    // the planet stands in front of its own rings, so the ring fades out
+    // where the disc begins instead of drawing across it.
     vec2 sd = c - P6;
-    float er = length(vec2(sd.x, sd.y * 3.0));
-    col += C6 * (1.0 - smoothstep(0.0, 30.0, abs(er - 517.0))) * (0.10 + uf * 0.22);
+    float er = length(vec2(sd.x, sd.y * 3.0)) / 220.0;      // in Saturn radii
+    float ringB = smoothstep(1.50, 1.56, er) * (1.0 - smoothstep(1.90, 1.97, er));
+    float ringA = smoothstep(2.01, 2.07, er) * (1.0 - smoothstep(2.24, 2.30, er));
+    float infront = smoothstep(216.0, 232.0, length(sd));
+    col += C6 * (ringB * 0.95 + ringA * 0.70) * infront * (0.07 + uf * 0.18);
+
+    // Earth's night side shows its cities: warm pinpricks past the
+    // terminator only, and only on land — the same noise field that mottles
+    // the daylit face decides where the continents are, so the lights and
+    // the landmasses agree about which planet this is.
+    vec2 ed = c - P3;
+    if (length(ed) < 105.0) {
+        vec2 en = ed / 105.0;
+        float night = smoothstep(0.02, 0.42, -dot(en, normalize(-P3)));
+        vec2 cp = ed / 9.0;
+        vec2 cc = floor(cp);
+        if (hash(cc + 4.2) > 0.80) {
+            vec2 cf = fract(cp) - 0.5;
+            float spark = 1.0 - smoothstep(0.05, 0.15, length(cf));
+            float onland = step(0.5, noise(en * 5.0 + 3.7));
+            col += vec3(1.0, 0.82, 0.55) * spark * night * onland
+                 * sqrt(max(0.0, 1.0 - dot(en, en))) * (0.30 + uf * 0.55);
+        }
+    }
 
     // Neighbourhood pools — each planet's colour spread wide and thin, so a
     // district sits in its own light rather than on flat black.
