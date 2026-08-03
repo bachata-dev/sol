@@ -390,7 +390,14 @@ class Menu:
         if self.mode == "system":
             items = sol.system_items()
         else:
-            items, self.here = build(self.st, self.out, at)
+            # Opened from the bar, the pointer is on a button, and the canvas
+            # point under a button is not a place anyone pointed at — it is
+            # wherever the top-left corner of the screen happens to look at.
+            # So a menu opened there is about where you *are*, which is what
+            # the bar beside it already says. It still opens at the pointer:
+            # that part of "at the pointer" is right wherever you clicked.
+            items, self.here = build(self.st, self.out,
+                                     None if self.mode == "here" else at)
         self.present(items, opacity=0.0)   # nothing is shown until it is placed
         self.fade()
 
@@ -535,7 +542,9 @@ def main():
     # dismisses the one already up, which is what a menu grab means.
     close_any_other()
     GLib.set_prgname(PROBE)      # the app_id the probe window is matched by
-    menu = Menu("system" if "--system" in sys.argv[1:] else "context")
+    argv = sys.argv[1:]
+    mode = "system" if "--system" in argv else "here" if "--here" in argv else "context"
+    menu = Menu(mode)
     # The probe runs even for the ☉ menu, which does not need to know where
     # the pointer is: its closing is what hands the overlay the pointer, and
     # a menu you cannot click is no better for hanging off the bar.

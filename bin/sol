@@ -1625,11 +1625,15 @@ def confirm_items(label, action):
 def cmd_menu(args):
     """Open the context menu at the pointer.
 
-    `go` is the switcher, `system` is the ☉ menu that drops from the bar.
+    `go` is the switcher and `system` is the ☉ menu that drops from the bar.
+    `here` is the context menu opened from somewhere that is not the canvas —
+    the bar — where there is a pointer to open at but no place under it, so
+    it describes where you are standing instead of what you clicked on.
     """
     if args and args[0] == "go":
         return menu_go()
-    argv = ["sol-menu"] + (["--system"] if args and args[0] == "system" else [])
+    flag = {"system": ["--system"], "here": ["--here"]}.get(args[0] if args else "", [])
+    argv = ["sol-menu"] + flag
     try:
         os.execvp("sol-menu", argv)
     except OSError:

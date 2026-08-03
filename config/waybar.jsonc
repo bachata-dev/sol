@@ -3,7 +3,7 @@
 // in bold, then its menus. Here, the planet you are standing on is the
 // frontmost application, so it gets the same place and the same weight.
 //
-//   ☉          where  would be: the menu of everything sol can do
+//   ☉          where  would be, holding what  holds: the machine
 //   Earth      the "app": where you are, in bold, in its own colour
 //   home · 10  its "menus": the role it plays and what it is holding
 //   ①②❸④┊⑤⑥⑦⑧  the strip — all eight planets, and who is holding what
@@ -29,7 +29,7 @@
   "custom/sol": {
     "format": "☉",
     "on-click": "sol menu system",
-    "on-click-right": "sol menu",
+    "on-click-right": "sol menu here",
     "tooltip": false
   },
 
@@ -39,7 +39,7 @@
     "return-type": "json",
     "interval": 1,
     "on-click": "sol system",
-    "on-click-right": "sol menu"
+    "on-click-right": "sol menu here"
   },
   "custom/holding": {
     "exec": "sol bar holding",
