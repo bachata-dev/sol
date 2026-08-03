@@ -30,6 +30,7 @@ whole-system view and the menu says Jupiter — its windows, its tidy, its step
 — instead of shrugging at "the system" because the camera was over the Sun.
 """
 
+import collections
 import ctypes
 import importlib.machinery
 import importlib.util
@@ -250,6 +251,13 @@ BAR_H, BAR_LEFT = 28, 14
 # invisible edge of the shadow.
 SHADOW = 26
 
+# One live row of the card: the widget the pointer lands on, and what that
+# widget stands for. A record rather than a tuple because the two readers of
+# this list want different halves of it — the highlight wants the widget, the
+# activation wants the action — and positional unpacking silently let those
+# two disagree about how wide a row was, which cost the menu its keyboard.
+Row = collections.namedtuple("Row", "box kind label action")
+
 
 class Menu:
     def __init__(self, mode="context"):
@@ -359,7 +367,7 @@ class Menu:
         ev.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
         ev.connect("enter-notify-event", lambda *_: self.highlight(idx))
         ev.connect("button-press-event", lambda *_: self.run(idx))
-        self.rows.append((ev, kind, label, action))
+        self.rows.append(Row(ev, kind, label, action))
         return ev
 
     def place(self, at):
@@ -440,8 +448,8 @@ class Menu:
         if not self.rows:
             return
         i = i % len(self.rows) if i is not None else -1
-        for k, (ev, _) in enumerate(self.rows):
-            ctx = ev.get_style_context()
+        for k, row in enumerate(self.rows):
+            ctx = row.box.get_style_context()
             if k == i:
                 ctx.add_class("on")
             else:
@@ -454,19 +462,34 @@ class Menu:
         # key has nothing to act on and must not quietly pick the last row.
         if self.done or not self.rows or not 0 <= i < len(self.rows):
             return True
-        _, kind, label, action = self.rows[i]
-        if kind == "ask":
+        row = self.rows[i]
+        if row.kind == "ask":
             # An ellipsis promised another step. This is the step.
-            self.present(sol.confirm_items(label, action))
+            self.present(sol.confirm_items(row.label, row.action))
             return True
         self.done = True                 # a menu answers once
         self.win.hide()                  # gone before what it starts appears
         while Gtk.events_pending():
             Gtk.main_iteration()
-        if action:
-            subprocess.Popen(action, start_new_session=True)
+        if row.action:
+            self.fire(row.action)
         Gtk.main_quit()
         return True
+
+    def fire(self, action):
+        """Start what the row promised, and say so if it will not start.
+
+        A menu row that silently does nothing is the worst answer a menu can
+        give — you cannot tell a refusal from a misclick, so you click again.
+        The command outlives this process, so its own failures are its own
+        business; what belongs here is the one failure this process can see:
+        the program not being there to run at all.
+        """
+        try:
+            subprocess.Popen(action, start_new_session=True)
+        except OSError as e:
+            sys.stderr.write("sol-menu: %s: %s\n" % (" ".join(action), e))
+            sol.note_failure(action, e)
 
     def clicked_away(self, _w, _ev):
         """A click that misses the menu is what closes it — as it always has been.
