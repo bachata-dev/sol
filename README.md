@@ -211,8 +211,8 @@ makes it worth having**: nothing is parked, so it can take the room it needs to 
 ![the overview](screenshots/overview.png)
 
 **The bar** borrows the grammar of the macOS menu bar, because the mapping turns out to be exact:
-the planet you are standing on is the frontmost application. So `☉` opens sol's menu where the Apple
-menu would be, the place is named in **bold** where the app name goes — "Earth", "Saturn", "the
+the planet you are standing on is the frontmost application. So `☉` sits where  sits and opens
+what  opens, the place is named in **bold** where the app name goes — "Earth", "Saturn", "the
 system", "deep space", in that planet's colour — and what it holds ("home · 10") reads as that app's
 menus. Status sits on the right, monochrome and quiet, then Control Centre, then the clock last.
 
@@ -228,8 +228,15 @@ other modules' answers in a file for them to read, so eight planets' worth of ta
 
 ![the bar](screenshots/bar.png)
 
-**The `☉` menu** is what the sun at the far left opens and what right-clicking the sky means: a
-context menu for wherever you are standing — tidy it, step through it, open a terminal here — with
+**The `☉` menu** is the one at the far left, and it holds what  holds: the operations that belong
+to the machine rather than to anything on it — lock screen, sleep, restart, shut down, log out. It
+drops from the bar, left-aligned under the glyph, because that is what a menu-bar menu does. The
+three that would lose unsaved work end in an ellipsis and ask again before doing anything, so
+nothing below that line happens on a single misclick. The commands are systemd's and swaylock's;
+`POWER` at the top of that section in `bin/sol` is the only place that knows them.
+
+**The context menu** is what right-clicking the sky means, and what right-clicking `☉` gives you: a
+menu for the place under your pointer — tidy it, step through it, open a terminal here — with
 travel behind one labelled "Go to a planet…" item. `mod+tab` skips straight to that switcher:
 every place, what it holds, type to filter.
 
@@ -330,7 +337,9 @@ sol send 8        # send the focused window to Neptune; `--stay` to not follow
 sol list          # what is where
 sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
-sol menu          # the ☉ menu: everywhere to go, and what to do
+sol menu          # the context menu, at the pointer
+sol menu system   # the ☉ menu: lock, sleep, restart, shut down, log out
+sol menu go       # the switcher: every place, type to filter
 sol map           # the overview (runs inside a terminal; sol-map toggles it)
 sol bar strip     # one line of the bar — where, holding, strip, or last
 sol shift back    # move the focused window a slot along its grid

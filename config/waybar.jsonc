@@ -23,9 +23,13 @@
                      "custom/p5", "custom/p6", "custom/p7", "custom/p8"],
   "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray", "custom/overview", "clock"],
 
+  // The ☉ sits where  sits, so it opens what  opens: lock, sleep,
+  // restart, shut down, log out — the machine, not the canvas. Right-click
+  // it for the canvas menu, which is also what right-clicking the sky gives.
   "custom/sol": {
     "format": "☉",
-    "on-click": "sol menu",
+    "on-click": "sol menu system",
+    "on-click-right": "sol menu",
     "tooltip": false
   },
 

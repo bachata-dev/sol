@@ -223,8 +223,9 @@ window { background-color: transparent; }
 }
 .heading { padding: 4px 15px 6px 15px; }
 .title   { color: %(tint)s; }
-.shut    { color: #565f89; margin-left: 30px; }
-.shut label { padding: 0 2px; }
+.shut    { color: #565f89; }
+.shut label { padding: 0 2px 0 30px; }
+
 .shut.on { color: #c0caf5; }
 .line    { padding: 4px 15px; }
 .row.on  { background-color: #283457; }
@@ -238,6 +239,11 @@ GAP = 2             # between the pointer and the corner it hangs from
 EDGE = 8            # nearest the menu comes to the side of the screen
 TOP = 36            # ... and to the bar along the top
 BOTTOM = 34         # ... and the footer along the bottom
+# Where the ☉ menu hangs from: the height of the bar and the left edge of the
+# glyph it belongs to (waybar.jsonc `height`, waybar.css `#custom-sol`). A
+# menu-bar menu drops from its own title, which is what makes it read as that
+# title's menu rather than as something that happened to appear.
+BAR_H, BAR_LEFT = 28, 14
 # Room around the card for its shadow to fall in. GTK clips a box-shadow to
 # the widget's allocation, so the card asks for a margin and the placement
 # takes it back off again — what lands at the pointer is the border, not the
@@ -246,11 +252,13 @@ SHADOW = 26
 
 
 class Menu:
-    def __init__(self):
+    def __init__(self, mode="context"):
+        self.mode = mode
         self.d = sol.Drift()
         self.st = self.d.state()
         self.out = sol.active_output(self.st)
         self.rows, self.sel, self.done = [], -1, False
+        self.body, self.here, self.at = None, None, None
 
         self.win = Gtk.Window()
         self.win.set_app_paintable(True)
@@ -286,7 +294,7 @@ class Menu:
             elif kind == "title":
                 box.pack_start(self.heading(label), False, False, 0)
             else:
-                box.pack_start(self.row(label, accel, action), False, False, 0)
+                box.pack_start(self.row(kind, label, accel, action), False, False, 0)
         return box
 
     def heading(self, label):
@@ -327,7 +335,7 @@ class Menu:
         else:
             ctx.remove_class("on")
 
-    def row(self, label, accel, action):
+    def row(self, kind, label, accel, action):
         """One line: what it does on the left, how to do it by hand on the right.
 
         An EventBox rather than a button, because a menu row is not a button:
@@ -351,7 +359,7 @@ class Menu:
         ev.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
         ev.connect("enter-notify-event", lambda *_: self.highlight(idx))
         ev.connect("button-press-event", lambda *_: self.run(idx))
-        self.rows.append((ev, action))
+        self.rows.append((ev, kind, label, action))
         return ev
 
     def place(self, at):
@@ -365,7 +373,9 @@ class Menu:
         ow, oh = self.out["size"]
         want = self.body.get_preferred_size()[1]
         w, h = want.width - 2 * SHADOW, want.height - 2 * SHADOW
-        if at is None:
+        if self.mode == "system":
+            left, top = BAR_LEFT, BAR_H + GAP     # hung from the ☉ it belongs to
+        elif at is None:
             left, top = (ow - w) / 2.0, (oh - h) / 2.0
         else:
             px, py = to_screen(self.out, at)
@@ -376,13 +386,29 @@ class Menu:
         self.fixed.move(self.body, int(left) - SHADOW, int(top) - SHADOW)
 
     def show(self, at):
-        items, here = build(self.st, self.out, at)
-        self.body = self.card(items, here)
-        self.body.set_opacity(0.0)      # nothing is shown until it is placed
+        self.at = at
+        if self.mode == "system":
+            items = sol.system_items()
+        else:
+            items, self.here = build(self.st, self.out, at)
+        self.present(items, opacity=0.0)   # nothing is shown until it is placed
+        self.fade()
+
+    def present(self, items, opacity=1.0):
+        """Draw the card, or draw a different one in its place.
+
+        Redrawing is how an item that ends in an ellipsis asks its question:
+        the menu does not open a second window over itself, it becomes the
+        question, in the same place, at the same size it already was.
+        """
+        if self.body is not None:
+            self.body.destroy()
+        self.rows, self.sel = [], -1
+        self.body = self.card(items, self.here)
+        self.body.set_opacity(opacity)
         self.fixed.put(self.body, 0, 0)
         self.win.show_all()
-        self.place(at)
-        self.fade()
+        self.place(self.at)
 
     def fade(self, ms=110, steps=11):
         """Arrive, rather than be switched on.
@@ -421,8 +447,12 @@ class Menu:
         # key has nothing to act on and must not quietly pick the last row.
         if self.done or not self.rows or not 0 <= i < len(self.rows):
             return True
+        _, kind, label, action = self.rows[i]
+        if kind == "ask":
+            # An ellipsis promised another step. This is the step.
+            self.present(sol.confirm_items(label, action))
+            return True
         self.done = True                 # a menu answers once
-        action = self.rows[i][1]
         self.win.hide()                  # gone before what it starts appears
         while Gtk.events_pending():
             Gtk.main_iteration()
@@ -505,7 +535,10 @@ def main():
     # dismisses the one already up, which is what a menu grab means.
     close_any_other()
     GLib.set_prgname(PROBE)      # the app_id the probe window is matched by
-    menu = Menu()
+    menu = Menu("system" if "--system" in sys.argv[1:] else "context")
+    # The probe runs even for the ☉ menu, which does not need to know where
+    # the pointer is: its closing is what hands the overlay the pointer, and
+    # a menu you cannot click is no better for hanging off the bar.
     Probe(menu.d, menu.show)
     Gtk.main()
 

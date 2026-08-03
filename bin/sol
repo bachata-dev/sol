@@ -25,7 +25,7 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol send <name|number>       send the focused window to a planet
   sol list                     what is where
   sol here [--waybar]          where am I?
-  sol menu                     fuzzel warp menu
+  sol menu [system|go]         the context menu · the ☉ menu · the switcher
   sol map                      the overview (runs inside a terminal)
   sol bar <where|holding|strip>  one line of the bar
   sol help [--hold]            keybinding card
@@ -1551,12 +1551,87 @@ def menu_items(here, n, standing):
     return out
 
 
+# ── The system menu ───────────────────────────────────────────────────────
+# The bar borrows the shape of the macOS menu bar, and the ☉ at the left end
+# of it sits exactly where  does. So it opens what  opens: the operations
+# that belong to the machine rather than to anything on it. It drops from the
+# bar rather than arriving at the pointer, because that is what a menu-bar
+# menu does — the menu belongs to the thing you clicked, and hangs from it.
+#
+# The commands are systemd's and swaylock's, which is what driftwm runs under
+# here. On a machine with something else, this is the only place that knows.
+POWER = {
+    "lock":     ["swaylock", "-f"],
+    "sleep":    ["systemctl", "suspend"],
+    "restart":  ["systemctl", "reboot"],
+    "shutdown": ["systemctl", "poweroff"],
+    "logout":   ["driftwm", "msg", "action", "quit"],
+}
+
+
+def machine():
+    """Who and what — the line an About box would carry."""
+    who = "%s@%s" % (os.environ.get("USER") or "you", socket.gethostname())
+    what = "driftwm"
+    try:
+        import subprocess
+        said = subprocess.run(["driftwm", "--version"], capture_output=True,
+                              text=True, timeout=1).stdout.split()
+        what = " ".join(said[:2]) or what
+    except Exception:
+        pass
+    return "%s  ·  %s" % (who, what)
+
+
+def system_items():
+    """The rows of the ☉ menu: what you do to the machine, not to the canvas.
+
+    Three groups, in the order every desktop has settled on — the ones that
+    leave the session running, the ones that take the machine down, and
+    leaving. The three that would lose unsaved work end in an ellipsis and
+    ask again. The ellipsis means the same thing here it means everywhere
+    else, and a menu one click from the corner of the screen has to keep
+    that promise: nothing below this line happens on a single misclick.
+    """
+    return [
+        ("title", machine(), "", None),
+        ("sep", "", "", None),
+        ("item", "Lock screen", "mod+l", POWER["lock"]),
+        ("item", "Sleep", "", POWER["sleep"]),
+        ("sep", "", "", None),
+        ("ask", "Restart…", "", POWER["restart"]),
+        ("ask", "Shut down…", "", POWER["shutdown"]),
+        ("sep", "", "", None),
+        ("ask", "Log out…", "", POWER["logout"]),
+    ]
+
+
+def confirm_items(label, action):
+    """The second half of an item that ended in an ellipsis.
+
+    The dangerous answer is named rather than called "OK", so the row you are
+    about to click says what it does, and nothing is selected when it opens —
+    a return pressed out of habit lands on nothing.
+    """
+    plain = label.rstrip("…")
+    return [
+        ("title", "%s?" % plain, "", None),
+        ("sep", "", "", None),
+        ("item", plain, "", action),
+        ("item", "Cancel", "esc", None),
+    ]
+
+
 def cmd_menu(args):
-    """Open the context menu at the pointer — or, with `go`, the switcher."""
+    """Open the context menu at the pointer.
+
+    `go` is the switcher, `system` is the ☉ menu that drops from the bar.
+    """
     if args and args[0] == "go":
         return menu_go()
+    argv = ["sol-menu"] + (["--system"] if args and args[0] == "system" else [])
     try:
-        os.execvp("sol-menu", ["sol-menu"])
+        os.execvp("sol-menu", argv)
     except OSError:
         sys.exit("sol menu: sol-menu is not installed")
 
@@ -1590,6 +1665,7 @@ HELP = """
    planet and it flies itself into that planet's grid.
 
    THE MOUSE          a number in the bar   click it, you are there
+                      ☉ at the far left     lock · sleep · restart · shut down
                       right-click the sky   this place: tidy · terminal · go
                       middle-click the sky  the overview · wheel  zoom
 
