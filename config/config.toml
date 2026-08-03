@@ -276,9 +276,13 @@ corner_radius = 14
 # same menu lands on screen whatever altitude you are at.
 [[window_rules]]
 app_id = "sol-menu"
-decoration = "none"
+decoration = "minimal"
 blur = true
-corner_radius = 10
+corner_radius = 8
+border_width = 1
+border_color = "#414868"
+border_color_focused = "#414868"
+shadow = true
 
 # The command line, sitting just above the footer it belongs to.
 [[window_rules]]

@@ -95,9 +95,11 @@ On a mouse, every click borrows a habit you already have, and does what that hab
 - **Right-click the sky acts on what is here**, as right-click has since desktops began: tidy this
   planet, step through its windows, *new terminal here* — the oldest right-click item there is, and
   since new windows land under the cursor, "here" is exactly where you clicked. Travel sits behind
-  one labelled door, "Go to a planet…", instead of being what the menu is. It **opens under the
-  pointer**, **flips up or left** rather than hang off an edge, and **closes when you click away** —
-  the three things that make a context menu one, and the three a launcher cannot do.
+  one labelled door, "Go to a planet…", instead of being what the menu is. It **opens down and to
+  the right of the pointer**, **flips up or left** rather than hang off an edge, and **closes when
+  you click away** — the three things that make a context menu one, and the three a launcher cannot
+  do. Each item carries its keyboard equivalent down the right, the way a menu teaches you to stop
+  needing it.
 - **Middle-click the sky opens the overview** — middle-on-the-root has meant the window list since
   X11 had root menus, and the overview is the window list.
 - **On a window, sol binds nothing without a modifier.** Middle-click is paste and stays paste;
@@ -236,6 +238,11 @@ off an edge, and closes the moment focus goes elsewhere, which is what clicking 
 a canvas window, so it is drawn at whatever zoom you are at; its size and font are divided by that
 zoom, and the same menu lands on screen whether you are at working zoom or looking at the whole
 system.
+
+driftwm centres a new window on the cursor, which is right for a window and wrong for a menu — so
+sol reads that centre back (it is where you clicked) and moves the menu so its corner sits there
+instead. It waits for the window to be configured before doing so: a window exists at 0×0 for a
+moment before it is placed, and moving it in that gap moves nothing at all.
 
 ![the menu](screenshots/menu.png)
 

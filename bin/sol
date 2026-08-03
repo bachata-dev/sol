@@ -1479,26 +1479,38 @@ MENU_PAD = 8
 
 
 def menu_items(st, d):
-    """What the menu offers, and what each thing does."""
+    """What the menu offers: a title, then what you would do to this place.
+
+    Shaped like a menu rather than a list — a heading that names what you
+    right-clicked, rules between groups, and the keyboard equivalent of each
+    item down the right, which is how a menu teaches you to stop needing it.
+    """
     place, on_it, n = whereabouts(st, d.camera(), d.zoom())
     here = place if on_it and place is not None else None
-    out = []
     if here is None:
-        out.append(("the system — all eight planets", "head", ["system"]))
+        title = "the system  ·  all eight planets"
+    elif here is SUN:
+        title = "Sun  ·  home base"
     else:
-        label = ("Sun — home base" if here is SUN else
-                 "%d %s — %s%s" % (here.n, here.name, here.role,
-                                   "  ·  %d" % n if n else ""))
-        out.append((label, "head", ["goto", "sun" if here is SUN else str(here.n)]))
+        title = "%d %s  ·  %s%s" % (here.n, here.name, here.role,
+                                    "  ·  %d" % n if n else "")
+    out = [("title", title, "", None), ("sep", "", "", None)]
     if here is not None and n:
-        out.append(("Tidy this planet", "act", ["arrange"]))
-        out.append(("Step through its windows", "act", ["next"]))
-    out.append(("New terminal here", "act", ["--terminal"]))
-    out.append(("Go to a planet…", "act", ["menu", "go"]))
-    out.append(("Overview", "act", ["--map"]))
-    out.append(("Whole system", "act", ["system"]))
-    out.append(("Keybindings", "act", ["--help-card"]))
+        out.append(("item", "Tidy this planet", "mod+a", ["arrange"]))
+        out.append(("item", "Step through its windows", "mod+n", ["next"]))
+    out.append(("item", "New terminal here", "mod+⏎", ["--terminal"]))
+    out.append(("sep", "", "", None))
+    out.append(("item", "Go to a planet…", "mod+tab", ["menu", "go"]))
+    out.append(("item", "Overview", "mod+e", ["--map"]))
+    out.append(("item", "Whole system", "mod+u", ["--system"]))
+    out.append(("item", "Keybindings", "mod+/", ["--help-card"]))
     return out, here
+
+
+def menu_size(items):
+    """(columns, rows) the menu needs — the widest row, and one per line."""
+    cols = max(len(label) + len(accel) for _, label, accel, _ in items) + 7
+    return max(cols, 26), len(items) + 1
 
 
 def cmd_menu(args):
@@ -1512,10 +1524,7 @@ def cmd_menu(args):
     st = d.state()
     items, _ = menu_items(st, d)
     z = max(0.02, d.zoom())
-    cols = max(len(label) for label, _, _ in items) + 5
-    rows = len(items) + 2                  # the rule under the heading, and a
-                                           # spare so the last line cannot
-                                           # scroll the first one away
+    cols, rows = menu_size(items)
     # Divide by the zoom, so what lands on screen is the same size every time.
     w = int((cols * CELL_W + 2 * MENU_PAD) / z)
     h = int((rows * CELL_H + 2 * MENU_PAD) / z)
@@ -1524,44 +1533,59 @@ def cmd_menu(args):
         ["foot", "-a", "sol-menu",
          "--window-size-pixels=%dx%d" % (w, h),
          "--font=JetBrains Mono:size=%.1f" % (MENU_FONT / z),
-         "-o", "colors.alpha=0.96", "-o", "colors.background=16161e",
+         "-o", "colors.alpha=0.97", "-o", "colors.background=1a1b26",
          "-o", "main.pad=%dx%d" % (MENU_PAD, MENU_PAD),
          "-e", "sol", "menu", "draw"],
         start_new_session=True)
-    keep_on_screen(d)
+    place_at_pointer(d)
 
 
-def keep_on_screen(d, tries=24):
-    """Flip the menu back inside the screen, the way every menu does.
+def place_at_pointer(d, tries=120):
+    """Put the menu's corner on the pointer, and unfold it away from the edge.
 
-    driftwm puts the window's top-left at the pointer, which is right until
-    you click near an edge and the menu hangs off it. A menu that would fall
-    off the bottom opens upwards instead, and one that would fall off the
-    right opens leftwards — so the corner you clicked in decides which way it
-    unfolds, and it is always wholly visible.
+    driftwm centres a new window on the cursor, which is right for a window
+    and wrong for a menu: menus hang their top-left corner off the pointer
+    and open down and to the right, so the click point stays visible and the
+    list grows into the space you have. Near an edge they open the other way
+    instead — up, or left, or both — which is why a menu in the corner of a
+    screen still shows you all of itself.
+
+    The centring is what we are given, so it is also how we learn where the
+    pointer is: the window arrives centred on it, and that centre is the
+    click. But it arrives in two steps — it appears at 0x0 before it is
+    configured and placed — and moving it in that gap moves nothing, because
+    the placement that follows overwrites it. So this waits for a size, and
+    then for a position that has stopped changing.
     """
+    seen = None
     for _ in range(tries):
-        time.sleep(0.05)
+        time.sleep(0.02)
         st = d.state()
         me = next((w for w in st.get("windows", [])
                    if w.get("app_id") == "sol-menu"), None)
-        if not me:
+        if not me or me["size"][0] <= 0 or me["size"][1] <= 0:
             continue
+        at = tuple(me["position"])
+        if at != seen:            # still being placed; wait for it to settle
+            seen = at
+            continue
+
         ow, oh = screen(st)
         out = st["outputs"][0]
         cx, cy = out["camera"]
         z = out["zoom"] or 1.0
         (wx, wy), (sw, sh) = me["position"], me["size"]
-        hw, hh = sw * z / 2.0, sh * z / 2.0
-        sx = ow / 2.0 + (wx - cx) * z
-        sy = oh / 2.0 - (wy - cy) * z
-        dx = dy = 0.0
-        if sy + hh > oh - 32:                  # would fall off the bottom
-            dy = 2 * hh
-        if sx + hw > ow - 8:                   # ... or off the right
-            dx = -2 * hw
-        if dx or dy:
-            d.move(me["id"], wx + dx / z, wy + dy / z)
+        w, h = sw * z, sh * z
+        px = ow / 2.0 + (wx - cx) * z          # the pointer: where it centred
+        py = oh / 2.0 - (wy - cy) * z
+        gap = 2.0
+        left = px + gap if px + gap + w <= ow - 8 else px - gap - w
+        top = py + gap if py + gap + h <= oh - 34 else py - gap - h
+        left = max(8.0, min(left, ow - 8 - w))
+        top = max(36.0, min(top, oh - 34 - h))
+        d.move(me["id"],
+               cx + (left + w / 2.0 - ow / 2.0) / z,
+               cy - (top + h / 2.0 - oh / 2.0) / z)
         return
 
 
@@ -1580,9 +1604,13 @@ def menu_draw():
     import tty
     d = Drift()
     items, here = menu_items(d.state(), d)
-    colour = (here.colour if here is not None else "#bb9af7")
     tint = "\033[38;2;%d;%d;%dm" % tuple(
-        int(colour[i:i + 2], 16) for i in (1, 3, 5))
+        int((here.colour if here is not None else "#bb9af7")[i:i + 2], 16)
+        for i in (1, 3, 5))
+    SEL = "\033[48;2;40;52;87m"        # the selection bar
+    ACC = "\033[38;2;86;95;137m"       # the keyboard equivalent, kept quiet
+    ACC_ON = "\033[38;2;138;148;186m"  # ... and lifted where the bar is under it
+    RULE = "\033[38;2;41;46;66m"
 
     fd = sys.stdin.fileno()
     try:
@@ -1594,48 +1622,55 @@ def menu_draw():
     # way a menu's does; 1004 is focus reporting, which is the dismissal.
     sys.stdout.write("\033[?25l\033[2J\033[?1006h\033[?1003h\033[?1004h")
 
-    sel = [0]
-
     try:
         cols = os.get_terminal_size().columns
     except OSError:
-        cols = 40
+        cols = menu_size(items)[0]
+
+    live = [i for i, it in enumerate(items) if it[0] == "item"]
+    sel = [live[0] if live else 0]
 
     def paint():
         buf = ["\033[H"]
-        for i, (label, kind, _) in enumerate(items):
-            lead = " ▸ " if kind == "head" else "   "
-            text = (lead + label).ljust(cols)[:cols]
-            if i == sel[0]:
-                # The highlight runs the full width, as a menu's does — a bar
-                # that stops at the text is a selected string, not a row.
-                buf.append("\033[7m" + (tint if kind == "head" else C_FG)
-                           + text + C_RST)
+        for i, (kind, label, accel, _) in enumerate(items):
+            if kind == "sep":
+                buf.append(RULE + " " + "─" * max(0, cols - 2) + C_RST)
+            elif kind == "title":
+                buf.append(tint + " " + label.ljust(cols - 1)[:cols - 1] + C_RST)
             else:
-                buf.append((tint if kind == "head" else C_FG) + text + C_RST)
+                # Colour is applied around the text, never inside a string
+                # that is then padded — an escape sequence has no width on
+                # screen and every width to ljust(), which is what left the
+                # keyboard hints truncated off every unselected row.
+                on = i == sel[0]
+                pad = max(1, cols - 2 - len(label) - len(accel))
+                buf.append((SEL if on else "") + C_FG + " " + label
+                           + " " * pad
+                           + (ACC_ON if on else ACC) + accel + " " + C_RST)
             buf.append("\033[K\n")
-            if kind == "head":
-                buf.append(C_DIM + "─" * cols + C_RST + "\033[K\n")
         # No newline after the last row: one more would scroll the heading
         # off the top of a window sized exactly to its contents.
         sys.stdout.write("".join(buf).rstrip("\n"))
         sys.stdout.flush()
 
-    def row_of(term_row):
-        """Which item a terminal row belongs to (the rule adds one line)."""
-        r = term_row - 1
-        return r - 1 if r > 1 else (0 if r == 0 else None)
-
     def run(i):
-        what = items[i][2]
+        what = items[i][3]
         if what == ["--terminal"]:
             subprocess.Popen(["foot", "-c", FOOT_INI], start_new_session=True)
         elif what == ["--map"]:
             subprocess.Popen(["sol-map"], start_new_session=True)
         elif what == ["--help-card"]:
             subprocess.Popen(["sol-help"], start_new_session=True)
+        elif what == ["--system"]:
+            subprocess.Popen(["sol", "system"], start_new_session=True)
         else:
             subprocess.Popen(["sol"] + what, start_new_session=True)
+
+    def step(way):
+        if not live:
+            return
+        k = live.index(sel[0]) if sel[0] in live else 0
+        sel[0] = live[(k + way) % len(live)]
 
     buf = ""
     try:
@@ -1668,12 +1703,13 @@ def menu_draw():
                         btn, col, row = (int(v) for v in key[3:-1].split(";"))
                     except ValueError:
                         continue
-                    i = row_of(row)
-                    if i is None or not (0 <= i < len(items)):
+                    i = row - 1
+                    if not (0 <= i < len(items)) or items[i][0] != "item":
                         continue
-                    if btn == 35 or btn == 32:     # motion: follow the pointer
-                        sel[0] = i
-                        paint()
+                    if btn in (32, 35):            # motion: follow the pointer
+                        if sel[0] != i:
+                            sel[0] = i
+                            paint()
                     elif btn == 0 and key.endswith("m"):
                         run(i)
                         return
@@ -1681,9 +1717,9 @@ def menu_draw():
                 if key in ("q", "\033"):
                     return
                 if key in ("\033[A", "k"):
-                    sel[0] = (sel[0] - 1) % len(items)
+                    step(-1)
                 elif key in ("\033[B", "j"):
-                    sel[0] = (sel[0] + 1) % len(items)
+                    step(1)
                 elif key in ("\r", "\n"):
                     run(sel[0])
                     return
