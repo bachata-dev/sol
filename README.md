@@ -244,7 +244,9 @@ neither scales nor swallows clicks for. There is no zoom arithmetic left in it, 
 and nothing to undo: one menu, the same size and in the same place relative to your hand, at 7% and
 at 100%. It flips up or left rather than hang off an edge, closes when you click away — a
 full-screen transparent overlay is what a menu grab is — and fades in over a tenth of a second where
-it landed.
+it landed. It also carries an `✕`, which no desktop's context menu does: clicking away is the way
+out and always was, but a way out you cannot see is one you have to be told about, so there is one
+you can see. It is the same grey as the keyboard hints until the pointer is on it.
 
 What that costs is knowing where the pointer is, because a layer surface is not told. driftwm has no
 IPC for the cursor, and a surface that maps under a motionless pointer is sent no enter event to

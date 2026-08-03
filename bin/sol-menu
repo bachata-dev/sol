@@ -221,7 +221,11 @@ window { background-color: transparent; }
   box-shadow: 0 10px 28px alpha(black, 0.5);
   font-family: "JetBrains Mono"; font-size: 11pt;
 }
-.title   { color: %(tint)s; padding: 4px 15px 6px 15px; }
+.heading { padding: 4px 15px 6px 15px; }
+.title   { color: %(tint)s; }
+.shut    { color: #565f89; margin-left: 30px; }
+.shut label { padding: 0 2px; }
+.shut.on { color: #c0caf5; }
 .line    { padding: 4px 15px; }
 .row.on  { background-color: #283457; }
 .label   { color: #c0caf5; }
@@ -280,12 +284,48 @@ class Menu:
                 rule.get_style_context().add_class("rule")
                 box.pack_start(rule, False, False, 0)
             elif kind == "title":
-                cap = Gtk.Label(label=label, xalign=0.0)
-                cap.get_style_context().add_class("title")
-                box.pack_start(cap, False, False, 0)
+                box.pack_start(self.heading(label), False, False, 0)
             else:
                 box.pack_start(self.row(label, accel, action), False, False, 0)
         return box
+
+    def heading(self, label):
+        """The place this menu is about, and a way out that is visible.
+
+        No desktop puts a close button on a context menu — clicking away is
+        the way out, and it is the way out here too. This is here because a
+        way out you cannot see is one you have to be told about, and the
+        first thing anyone did with this menu was look for one. It is kept
+        quiet enough to stay out of the way of reading the title: the same
+        grey as the keyboard hints until the pointer is on it.
+        """
+        line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        line.get_style_context().add_class("heading")
+        cap = Gtk.Label(label=label, xalign=0.0)
+        cap.get_style_context().add_class("title")
+        line.pack_start(cap, False, False, 0)
+
+        shut = Gtk.EventBox()
+        shut.get_style_context().add_class("shut")
+        shut.add(Gtk.Label(label="✕"))
+        shut.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK
+                        | Gdk.EventMask.LEAVE_NOTIFY_MASK
+                        | Gdk.EventMask.BUTTON_PRESS_MASK)
+        shut.connect("enter-notify-event", lambda *_: self.lit(shut, True))
+        shut.connect("leave-notify-event", lambda *_: self.lit(shut, False))
+        shut.connect("button-press-event", lambda *_: Gtk.main_quit())
+        line.pack_end(shut, False, False, 0)
+        return line
+
+    def lit(self, shut, on):
+        """Light the way out under the pointer, and drop any row highlight —
+        the pointer is on the ✕, so no row is what you would choose now."""
+        ctx = shut.get_style_context()
+        if on:
+            ctx.add_class("on")
+            self.highlight(None)
+        else:
+            ctx.remove_class("on")
 
     def row(self, label, accel, action):
         """One line: what it does on the left, how to do it by hand on the right.
@@ -362,9 +402,11 @@ class Menu:
 
     # ── using it ─────────────────────────────────────────────────────────
     def highlight(self, i):
+        """Light one row, or None for none — which is how the menu opens, and
+        what the pointer moving onto the ✕ goes back to."""
         if not self.rows:
             return
-        i %= len(self.rows)
+        i = i % len(self.rows) if i is not None else -1
         for k, (ev, _) in enumerate(self.rows):
             ctx = ev.get_style_context()
             if k == i:
