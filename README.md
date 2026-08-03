@@ -249,6 +249,17 @@ time you opened it. So it is **born invisible** — `opacity = 0.0` in its windo
 nothing can see it, and fades in over a tenth of a second once it has arrived. What you see is a
 menu appearing beside the cursor, which is all you should ever have seen.
 
+It also **closes when the view moves**. A menu belongs to the moment it was opened in, and a canvas
+menu drawn for one zoom is the wrong size at any other — so a flight, a zoom, anything that moves
+the world under it, dismisses it.
+
+Below `interact_min` — the zoom at which driftwm decides a canvas window is too small to touch, and
+turns a click into "fly to that window" — a canvas menu would open and then refuse every click. That
+threshold is what makes click-to-fly and clicking a name plate work from far out, so it stays. Down
+there the menu is a **pinned** window instead: always its own size, always clickable, and centred,
+because pinned windows cannot be moved and because there is not much "here" to point at when the
+pointer is over a whole solar system.
+
 ![the menu](screenshots/menu.png)
 
 **The footer** is the same bar upside down. The header says where you are; this one says what sol

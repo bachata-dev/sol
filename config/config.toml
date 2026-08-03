@@ -290,6 +290,23 @@ shadow = true
 # appear anyway.
 opacity = 0.0
 
+# The same menu, for when you are too far out for driftwm to let a canvas
+# window take a click (see [zoom] interact_min). Pinned, so it is always its
+# own size and always clickable — and centred, because a pinned window cannot
+# be moved, and because there is no meaningful "here" when the pointer is over
+# the whole solar system.
+[[window_rules]]
+app_id = "sol-menu-far"
+pinned_to_screen = true
+decoration = "minimal"
+blur = true
+corner_radius = 8
+border_width = 1
+border_color = "#414868"
+border_color_focused = "#414868"
+shadow = true
+opacity = 0.0
+
 # The command line, sitting just above the footer it belongs to.
 [[window_rules]]
 app_id = "sol-cmd"

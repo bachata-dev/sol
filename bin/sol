@@ -1472,6 +1472,15 @@ def menu_go():
 # foot renders JetBrains Mono at about 0.60 em wide and 1.31 em tall, and a
 # point is 4/3 of a pixel at 96dpi — the missing 4/3 is what wrapped the
 # first draft's header onto a second line and scrolled the title away.
+# Must match [zoom] interact_min in config.toml. Below that zoom driftwm
+# treats a canvas window as too small to touch — it suppresses pointer input
+# and turns a click into "fly to this window" — which is what makes click-to-
+# fly and clicking a name plate work from far out. A canvas menu down there
+# would open fine and then refuse every click, so below this line the menu is
+# a pinned window instead: always its own size, always clickable, and centred,
+# because pinned windows cannot be moved and because "at the pointer" means
+# very little when the pointer is over a whole solar system.
+INTERACT_MIN = 0.45
 MENU_FONT = 11.0
 CELL_W = MENU_FONT * 4.0 / 3.0 * 0.60
 CELL_H = MENU_FONT * 4.0 / 3.0 * 1.31
@@ -1525,19 +1534,37 @@ def cmd_menu(args):
     items, _ = menu_items(st, d)
     z = max(0.02, d.zoom())
     cols, rows = menu_size(items)
-    # Divide by the zoom, so what lands on screen is the same size every time.
-    w = int((cols * CELL_W + 2 * MENU_PAD) / z)
-    h = int((rows * CELL_H + 2 * MENU_PAD) / z)
+    far = z < INTERACT_MIN
+    # A canvas menu is drawn at the zoom you are at, so its size and font are
+    # divided by that zoom; a pinned one is in screen pixels already.
+    scale = 1.0 if far else z
+    w = int((cols * CELL_W + 2 * MENU_PAD) / scale)
+    h = int((rows * CELL_H + 2 * MENU_PAD) / scale)
     import subprocess
     subprocess.Popen(
-        ["foot", "-a", "sol-menu",
+        ["foot", "-a", "sol-menu-far" if far else "sol-menu",
          "--window-size-pixels=%dx%d" % (w, h),
-         "--font=JetBrains Mono:size=%.1f" % (MENU_FONT / z),
+         "--font=JetBrains Mono:size=%.1f" % (MENU_FONT / scale),
          "-o", "colors.alpha=0.97", "-o", "colors.background=1a1b26",
          "-o", "main.pad=%dx%d" % (MENU_PAD, MENU_PAD),
          "-e", "sol", "menu", "draw"],
         start_new_session=True)
-    place_at_pointer(d)
+    if far:
+        reveal_pinned(d)
+    else:
+        place_at_pointer(d)
+
+
+def reveal_pinned(d, tries=120):
+    """Fade in the far-out menu, which driftwm has already centred for us."""
+    for _ in range(tries):
+        time.sleep(0.02)
+        me = next((w for w in d.state().get("pinned", [])
+                   if w.get("app_id") == "sol-menu-far"), None)
+        if me and me["size"][0] > 0:
+            reveal(d, me["id"])
+            return
+    reveal(d, None)
 
 
 def place_at_pointer(d, tries=120):
@@ -1607,8 +1634,8 @@ def reveal(d, wid, ms=100, steps=10):
     """
     if wid is None:
         st = d.state()
-        me = next((w for w in st.get("windows", [])
-                   if w.get("app_id") == "sol-menu"), None)
+        me = next((w for w in list(st.get("windows", [])) + list(st.get("pinned", []))
+                   if str(w.get("app_id", "")).startswith("sol-menu")), None)
         if not me:
             return
         wid = me["id"]
@@ -1701,6 +1728,15 @@ def menu_draw():
         k = live.index(sel[0]) if sel[0] in live else 0
         sel[0] = live[(k + way) % len(live)]
 
+    def view():
+        try:
+            o = d.state()["outputs"][0]
+            return (round(o["camera"][0]), round(o["camera"][1]),
+                    round(o["zoom"], 4))
+        except Exception:
+            return None
+
+    where = view()
     buf = ""
     try:
         paint()
@@ -1710,6 +1746,13 @@ def menu_draw():
                 if buf == "\033":                 # a lone Esc
                     return
                 buf = ""
+                # A menu belongs to the moment it was opened in. If the view
+                # moves under it — a flight, a zoom, anything — it is stale,
+                # and a canvas menu drawn for one zoom is the wrong size at
+                # any other. Menus close when the world moves; so does this.
+                now = view()
+                if now is not None and where is not None and now != where:
+                    return
                 continue
             try:
                 chunk = os.read(fd, 64).decode("utf-8", "ignore")
