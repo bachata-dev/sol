@@ -1,0 +1,54 @@
+#!/bin/sh
+# sol-session — what the console becomes once you are logged in.
+#
+# `driftwm-up` is the rescue path: root, a spare VT, a getty evicted, and a
+# compositor owned by systemd rather than by anybody's login. This is the
+# ordinary one. agetty autologins on the console, the login shell reads its
+# profile, and the profile's last act is to run this — so the session running
+# your desktop is the session you logged into, holding the seat, the VT and
+# the runtime directory logind already handed it. Nothing here needs root,
+# and nothing here evicts anything.
+#
+# That distinction is not bookkeeping. logind grants "restart this machine"
+# to the active session on a local seat, so a desktop that boots as somebody
+# else's process is a desktop whose power menu quietly does nothing.
+#
+# The profile decides *whether* to call this — it is the one place that knows
+# you are on the console and not over ssh. This decides *how*.
+
+set -u
+
+LOG="${XDG_RUNTIME_DIR:-/tmp}/sol-session.log"
+
+# What a Wayland session is expected to say about itself. Portals, waybar and
+# anything asking "which desktop is this" read these, and a compositor started
+# from a bare login shell is the one case where nothing else sets them.
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=driftwm
+export XDG_SESSION_DESKTOP=sol
+
+command -v driftwm > /dev/null || {
+  echo "sol-session: driftwm is not installed — see https://github.com/malbiruk/driftwm" >&2
+  exit 1
+}
+
+# The universe self-assembles from driftwm's autostart; everything sol adds to
+# it lives in ~/.config/driftwm/config.toml.
+driftwm > "$LOG" 2>&1
+code=$?
+
+# Deliberately not `exec`, and deliberately not a loop. A compositor that dies
+# on startup — a missing GPU, a config typo, a bad connector name — would
+# otherwise take the console straight back to autologin and try again forever,
+# and a machine in a boot loop cannot be told anything. Falling back to the
+# login shell you came from means the next thing you see is a prompt that can
+# explain itself, on the console, without another machine to ssh in from.
+if [ "$code" -ne 0 ]; then
+  echo >&2
+  echo "sol: driftwm exited $code. The end of $LOG:" >&2
+  tail -n 20 "$LOG" >&2
+  echo >&2
+  echo "sol: 'sol doctor' explains most of it. 'sol-session' tries again." >&2
+fi
+
+exit "$code"

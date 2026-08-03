@@ -316,6 +316,16 @@ manager's session list, or on a spare VT:
 sudo driftwm-up          # defaults to VT 3
 ```
 
+The installer also offers to **boot into sol**: autologin on tty1, and a line in your profile that
+hands the console to `sol-session`. It is off by default, because it makes the machine log itself
+in — the right trade only when physical access to it already means everything.
+
+It matters for more than convenience. logind grants "restart this machine" to the *active session
+on a local seat*, so a desktop started some other way — by a root `systemd-run`, or with a second
+desktop still autologging in on another VT — is a desktop whose `☉` menu quietly does nothing when
+you click **Restart**. `sol doctor` says so in as many words. If the compositor fails to start,
+`sol-session` drops you back to the console prompt with the tail of its log rather than looping.
+
 **Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
 `python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu — without them right-click has
 nothing to open and everything else works; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
@@ -334,6 +344,10 @@ sol system        # frame the whole solar system
 sol arrange       # tidy this planet's windows; `sol arrange all` does every one
 sol next          # step to the next window here; `sol prev` goes back
 sol send 8        # send the focused window to Neptune; `--stay` to not follow
+sol gather        # bring every adrift window in; `sol gather 8` files them on Neptune
+sol sweep         # drain this planet's stack to the archive; `sol sweep 5 2` names both
+sol tour          # a narrated first flight; touch anything and it yields
+sol doctor        # is this machine set up right? paste it into bug reports
 sol list          # what is where
 sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
@@ -406,6 +420,10 @@ hundreds of times too large. Distance means "how far from what I'm doing", not k
 ```sh
 ./uninstall.sh    # removes the commands and the daemon; your config stays put
 ```
+
+It also takes back the boot hook if you asked for one — the profile block and the autologin
+drop-in go together, since a console that logs itself in for a desktop that is no longer there is
+worse than either alone.
 
 ## Status
 

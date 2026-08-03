@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# The console sol boots on, if you ask it to below. tty1 is the one every
+# distro leaves for a desktop; override for a machine that wants its console.
+BOOT_VT="${BOOT_VT:-1}"
+
 say()  { printf '\033[38;2;122;162;247m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[38;2;224;175;104m!\033[0m %s\n' "$*"; }
 
@@ -47,7 +51,8 @@ say "config installed to $CFG"
 
 # ── the sol command ───────────────────────────────────────────────────────
 say "installing sol to /usr/local/bin (sudo)"
-sudo install -m755 bin/sol bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd bin/driftwm-up /usr/local/bin/
+sudo install -m755 bin/sol bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
+                   bin/sol-session bin/driftwm-up /usr/local/bin/
 # opt-in extras: installed, but nothing starts them until you say so
 sudo install -m755 bin/sol-planetarium bin/sol-spin /usr/local/bin/
 
@@ -63,7 +68,52 @@ if [ "$WITH_SPIN" = 1 ]; then
   say "circle-gesture daemon enabled"
 fi
 
-say "done. Set your display in the MACHINE-SPECIFIC block of $CFG/config.toml,"
-say "then start driftwm from your display manager, or on a spare VT:"
-say "  sudo driftwm-up"
+# ── booting into sol (optional; autologin on the console VT) ──────────────
+# For a machine whose job is to be this desktop. It is deliberately not the
+# default: it makes the console log itself in, which is the right trade only
+# when the machine is yours and physical access already means everything.
+if [ "${WITH_BOOT:-ask}" = ask ]; then
+  read -rp "Boot into sol? (autologin on tty$BOOT_VT, then sol-session) [y/N] " a
+  [ "${a,,}" = y ] && WITH_BOOT=1 || WITH_BOOT=0
+fi
+if [ "$WITH_BOOT" = 1 ]; then
+  sudo mkdir -p "/etc/systemd/system/getty@tty$BOOT_VT.service.d"
+  sudo tee "/etc/systemd/system/getty@tty$BOOT_VT.service.d/autologin.conf" > /dev/null <<EOF
+# Written by sol's install.sh. Removing this file restores the login prompt.
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $USER --noclear %I \$TERM
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable "getty@tty$BOOT_VT"
+
+  # The profile is the one place that knows you are on the console rather
+  # than at the other end of an ssh connection, so it is the profile that
+  # decides whether to start a desktop at all. Written between markers so
+  # re-running this replaces the block instead of stacking another copy.
+  PROFILE="$HOME/.bash_profile"
+  [ -e "$PROFILE" ] || PROFILE="$HOME/.profile"
+  if [ -e "$PROFILE" ] && grep -q '^# ── sol ──' "$PROFILE"; then
+    say "replacing the existing sol block in $PROFILE"
+    sed -i '/^# ── sol ──/,/^# ── end sol ──/d' "$PROFILE"
+  fi
+  cat >> "$PROFILE" <<EOF
+# ── sol ──────────────────────────────────────────────────────────────────
+# On the console, and not already inside a session: become the desktop.
+# Not \`exec\` — sol-session explains why a boot loop is worse than a prompt.
+if [ -z "\${WAYLAND_DISPLAY:-}" ] && [ "\$(tty)" = "/dev/tty$BOOT_VT" ]; then
+  sol-session
+fi
+# ── end sol ──────────────────────────────────────────────────────────────
+EOF
+  say "booting into sol on tty$BOOT_VT (via $PROFILE)"
+fi
+
+say "done. Set your display in the MACHINE-SPECIFIC block of $CFG/config.toml."
+if [ "${WITH_BOOT:-0}" = 1 ]; then
+  say "Reboot, and the machine comes up in sol."
+else
+  say "Start driftwm from your display manager, or on a spare VT:"
+  say "  sudo driftwm-up"
+fi
 say "Once inside, press mod+/ for the keybinding card."
