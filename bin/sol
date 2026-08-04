@@ -44,6 +44,14 @@ import sys
 import time
 from collections import namedtuple
 
+# Everything else is imported inside the function that needs it, and that is
+# deliberate. `sol here` and `sol bar` are run once a second each by waybar, so
+# every module this file imports at the top is paid for twice a second forever.
+# The ones held back are the expensive ones and are wanted by nothing on that
+# path: readline costs 33ms, subprocess and ctypes about 8ms apiece — some 50ms
+# of startup, twice a second, to support `sol prompt` and `sol doctor`. Please
+# do not tidy them upward.
+
 # ── The solar system ──────────────────────────────────────────────────────
 # Canvas coordinates (Y-up), from the real sky for 2029-01-01: each planet is
 # placed by solving Kepler's equation, so it sits on its own ellipse at the
@@ -79,6 +87,18 @@ CARD_PAD = 70          # margin of the card a district sits on
 SHADER = os.path.expanduser("~/.config/driftwm/sol.glsl")
 FUZZEL = os.path.expanduser("~/.config/driftwm/fuzzel.ini")
 FOOT_INI = os.path.expanduser("~/.config/driftwm/foot.ini")
+
+
+def runtime(name):
+    """Where sol keeps something for the length of one session.
+
+    Claims, order, plates, the bar, the footer, the moving stamp: all of them
+    describe a running canvas and none of them should outlive the boot that
+    made them, which is exactly what XDG_RUNTIME_DIR is for. /tmp is the
+    fallback for a session that has none — a bare tty, a stripped container —
+    where the files are merely less private rather than missing.
+    """
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", name)
 
 
 # ── IPC ───────────────────────────────────────────────────────────────────
@@ -254,7 +274,7 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
 # somewhere rather than sliding across a desk.
 GLIDE_RATE = 90
 ARC = 0.16             # how far a between-planets path bows outward
-MOVING = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-moving")
+MOVING = runtime("sol-moving")
 
 
 def glide(d, moves, arc=0.0, rate=GLIDE_RATE):
@@ -382,7 +402,7 @@ def nearest(x, y):
 #
 # Furniture — name plates, the map, the help card — is scenery, and never
 # belongs to anyone.
-CLAIMS = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-districts.json")
+CLAIMS = runtime("sol-districts.json")
 
 
 def is_furniture(w):
@@ -394,22 +414,45 @@ def real_windows(st):
     return [w for w in st.get("windows", []) if not is_furniture(w)]
 
 
-def read_claims():
+def live_ids(st):
+    """The windows that still exist — what a saved record is pruned against."""
+    return {w["id"] for w in real_windows(st)}
+
+
+def read_map(path, value):
+    """A small map keyed by window or place number, or {} if it is not there.
+
+    JSON has string keys, so every one of these files reads back as text and
+    has to be turned into numbers again; `value` does the same for the other
+    half. Missing, empty, truncated by a crash mid-write, or hand-edited into
+    nonsense all mean the same thing here — sol has not been told anything —
+    and all of them must end as an empty map rather than a traceback, because
+    losing an arrangement is a small thing and refusing to draw the bar is not.
+    """
     try:
-        with open(CLAIMS) as f:
-            return {int(k): int(v) for k, v in json.load(f).items()}
-    except (OSError, ValueError):
+        with open(path) as f:
+            return {int(k): value(v) for k, v in json.load(f).items()}
+    except (OSError, ValueError, TypeError, AttributeError):
         return {}
+
+
+def write_map(path, mapping):
+    """Save one, quietly. These files are conveniences; none is worth a crash."""
+    try:
+        with open(path, "w") as f:
+            json.dump({str(k): v for k, v in mapping.items()}, f)
+    except OSError:
+        pass
+
+
+def read_claims():
+    return read_map(CLAIMS, int)
 
 
 def write_claims(st, claims):
     """Save the record, forgetting windows that have since closed."""
-    live = {w["id"] for w in real_windows(st)}
-    try:
-        with open(CLAIMS, "w") as f:
-            json.dump({str(k): v for k, v in claims.items() if k in live}, f)
-    except OSError:
-        pass
+    live = live_ids(st)
+    write_map(CLAIMS, {k: v for k, v in claims.items() if k in live})
 
 
 # Where each window sits in its district's grid. Window id was doing this job,
@@ -417,25 +460,16 @@ def write_claims(st, claims):
 # until you want the thing you are working on next to the thing you are
 # comparing it with. Anything sol has not been told about keeps its place by
 # id, so a district nobody has rearranged looks exactly as it always did.
-ORDER = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-order.json")
+ORDER = runtime("sol-order.json")
 
 
 def read_order():
-    try:
-        with open(ORDER) as f:
-            return {int(k): [int(i) for i in v] for k, v in json.load(f).items()}
-    except (OSError, ValueError):
-        return {}
+    return read_map(ORDER, lambda v: [int(i) for i in v])
 
 
 def write_order(st, order):
-    live = {w["id"] for w in real_windows(st)}
-    try:
-        with open(ORDER, "w") as f:
-            json.dump({str(k): [i for i in v if i in live]
-                       for k, v in order.items()}, f)
-    except OSError:
-        pass
+    live = live_ids(st)
+    write_map(ORDER, {k: [i for i in v if i in live] for k, v in order.items()})
 
 
 def in_order(n, wins):
@@ -450,51 +484,73 @@ def in_order(n, wins):
                                        w["id"]))
 
 
+def belongs_to(w, claims):
+    """The place a window belongs to, or None if it belongs nowhere.
+
+    Where you put it, for as long as it stays in the neighbourhood; failing
+    that, whatever it is nearest, provided that is near enough to be anywhere
+    at all. This is the single rule the whole district model rests on, so it
+    is written once: the census and the lost-window list are the two halves of
+    its answer, and when each carried its own copy of the rule they were one
+    edit away from disagreeing — a window counted on Earth and reported adrift
+    in the same breath.
+    """
+    x, y = w["position"]
+    n = claims.get(w["id"], -1)
+    put = PLACES[n] if 0 <= n < len(PLACES) else None
+    if put is not None and math.hypot(x - put.x, y - put.y) <= DISTRICT:
+        return put
+    place, dd = nearest(x, y)
+    return place if dd <= DISTRICT else None
+
+
+def sort_out(st):
+    """Work out once who holds what, and what is held by nobody.
+
+    Both answers come from one pass over the windows, and both are cached on
+    the state dict, because every caller that wants one usually wants the
+    other a line later — the bar draws the tally and the adrift count from the
+    same breath. `recount` is how anything that moves a window says the answer
+    is stale.
+    """
+    if "sol_districts" not in st:
+        claims = read_claims()
+        by_place, lost = {}, []
+        for w in real_windows(st):
+            place = belongs_to(w, claims)
+            if place is None:
+                lost.append(w)
+            else:
+                by_place.setdefault(place.n, []).append(w)
+        st["sol_districts"] = {n: in_order(n, wins)
+                               for n, wins in by_place.items()}
+        st["sol_adrift"] = lost
+
+
+def recount(st):
+    """Say the districts are stale — something moved, so work them out again."""
+    st.pop("sol_districts", None)
+    st.pop("sol_adrift", None)
+
+
 def assignment(st):
     """{place number: [windows]} — who holds what, worked out once."""
-    if "sol_districts" in st:
-        return st["sol_districts"]
-    claims = read_claims()
-    held = {}
-    for w in real_windows(st):
-        x, y = w["position"]
-        n = claims.get(w["id"], -1)
-        put = PLACES[n] if 0 <= n < len(PLACES) else None
-        if put and math.hypot(x - put.x, y - put.y) <= DISTRICT:
-            place = put
-        else:
-            place, dd = nearest(x, y)
-            if dd > DISTRICT:
-                continue
-        held.setdefault(place.n, []).append(w)
-    for n in held:
-        held[n] = in_order(n, held[n])
-    st["sol_districts"] = held
-    return held
+    sort_out(st)
+    return st["sol_districts"]
 
 
 def adrift(st):
     """Windows that belong nowhere — the founding problem, still reachable.
 
-    assignment() skips anything farther than DISTRICT from every place, so a
-    window dragged into deep space vanishes from the census, the bar, the
-    plates and the overview at once: lost in the way this project exists to
-    prevent. These are those windows. The bar counts them, `sol list` names
-    them, and `sol gather` brings them home — never automatically, because
-    the covenant on cameras extends to windows: nothing moves unasked.
+    A window dragged into deep space belongs to no district, and so used to
+    vanish from the census, the bar, the plates and the overview at once: lost
+    in the way this project exists to prevent. These are those windows. The
+    bar counts them, `sol list` names them, and `sol gather` brings them home
+    — never automatically, because the covenant on cameras extends to windows:
+    nothing moves unasked.
     """
-    claims = read_claims()
-    out = []
-    for w in real_windows(st):
-        x, y = w["position"]
-        n = claims.get(w["id"], -1)
-        put = PLACES[n] if 0 <= n < len(PLACES) else None
-        if put and math.hypot(x - put.x, y - put.y) <= DISTRICT:
-            continue
-        if nearest(x, y)[1] <= DISTRICT:
-            continue
-        out.append(w)
-    return out
+    sort_out(st)
+    return st["sol_adrift"]
 
 
 def district(st, place):
@@ -581,11 +637,11 @@ def grid(place, wins, aspect):
             # it, so the district reads as gathered around its world; and keep
             # the rows even, so no one window is left stranded on a line of
             # its own.
-            adrift = math.hypot(*centres[k]) / (math.hypot(width, height) / 2.0)
+            off_centre = math.hypot(*centres[k]) / (math.hypot(width, height) / 2.0)
             ragged = sum(width - sum(items[i][0] for i in r) for r in rows) \
                 / (width * len(rows))
             score = abs(math.log((width / height) / aspect)) \
-                + 1.2 * adrift + 2.2 * ragged
+                + 1.2 * off_centre + 2.2 * ragged
             if best is None or score < best[0]:
                 best = (score, centres, k, width, height)
 
@@ -682,7 +738,7 @@ def promote(st, place, wid):
     order = read_order()
     order[place.n] = [wid] + ids
     write_order(st, order)
-    st.pop("sol_districts", None)
+    recount(st)
 
 
 # ── The card each district sits on ────────────────────────────────────────
@@ -1002,7 +1058,7 @@ def cmd_send(args):
     claims = read_claims()
     claims[win["id"]] = p.n
     write_claims(st, claims)
-    st.pop("sol_districts", None)          # it has a new home; work it out again
+    recount(st)                            # it has a new home; work it out again
     plan = []
     tidy(d, st, p, ow / oh, plan)
     if was and was.n != p.n:
@@ -1033,7 +1089,7 @@ def _resettle(d, st, wins, dst, others=()):
         w["position"] = [dst.x, dst.y]
         claims[w["id"]] = dst.n
     write_claims(st, claims)
-    st.pop("sol_districts", None)
+    recount(st)
     plan = []
     tidy(d, st, dst, ow / oh, plan)
     for p in others:
@@ -1140,6 +1196,20 @@ class Stream:
         return out
 
 
+def shrug(doing, why):
+    """Survive a fault, but not in silence.
+
+    `sol watch` runs for the whole session, so one odd drop must not be the
+    end of it — but a handler that swallows without a word is how a real fault
+    hides for weeks, and "windows sometimes don't land right" is a bug report
+    with nothing in it. This process's stderr is driftwm's log, which is where
+    `sol doctor` already sends people, so the shrug is at least audible.
+    """
+    sys.stderr.write("sol watch: %s failed: %s: %s\n"
+                     % (doing, type(why).__name__, why))
+    sys.stderr.flush()
+
+
 def cmd_watch(args):
     """Finish the journey for any window you drop somewhere new."""
     act, ear = Drift(), Drift()
@@ -1149,7 +1219,11 @@ def cmd_watch(args):
     ear.s.settimeout(None)
     stream = Stream(ear.s)
 
-    seen, adrift, lift, focused = {}, {}, set(), None
+    # `unsettled`, not `adrift`: these are windows still in motion, whereas
+    # adrift() names the ones that came to rest outside every district. Two
+    # different ideas that both wanted the same word, and the module-level one
+    # is a function this loop would shadow.
+    seen, unsettled, lift, focused = {}, {}, set(), None
     while True:
         try:
             states = stream.take(0.05)
@@ -1167,7 +1241,7 @@ def cmd_watch(args):
                 # anything that looked like a drag while it was doing so.
                 seen = {w["id"]: (tuple(w["position"]), now)
                         for w in real_windows(st)}
-                adrift.clear()
+                unsettled.clear()
                 continue
             for w in real_windows(st):
                 wid, at = w["id"], tuple(w["position"])
@@ -1175,21 +1249,22 @@ def cmd_watch(args):
                 if was is None or at != was[0]:
                     seen[wid] = (at, now)
                 if was is not None and at != was[0]:
-                    adrift[wid] = at
+                    unsettled[wid] = at
         if moving.busy():
             continue
-        for wid in [k for k in list(adrift)
+        for wid in [k for k in list(unsettled)
                     if now - seen.get(k, (None, now))[1] >= SETTLE]:
-            adrift.pop(wid, None)
+            unsettled.pop(wid, None)
             try:
                 settle(act, wid)
-            except Exception:              # a daemon that dies on one odd drop
-                pass                       # is worse than one that shrugs
+            except Exception as e:         # a daemon that dies on one odd drop
+                shrug("settling window %d" % wid, e)   # is worse than one that shrugs
         while lift:
+            wid = lift.pop()
             try:
-                raise_up(act, lift.pop())
-            except Exception:
-                pass
+                raise_up(act, wid)
+            except Exception as e:
+                shrug("raising window %d" % wid, e)
 
 
 def raise_up(d, wid):
@@ -1229,7 +1304,7 @@ def put_at(st, place, wid, index):
     order = read_order()
     order[place.n] = ids
     write_order(st, order)
-    st.pop("sol_districts", None)          # the order changed; work it out again
+    recount(st)                            # the order changed; work it out again
 
 
 def settle(d, wid):
@@ -1269,7 +1344,7 @@ def settle(d, wid):
         write_claims(st, claims)
         if was:
             with moving():
-                st.pop("sol_districts", None)
+                recount(st)
                 plan = []
                 tidy(d, st, was, aspect, plan)
                 glide(d, plan)
@@ -1311,7 +1386,7 @@ def handoff(d, st, place, wid, drop, aspect, was):
     claims = read_claims()
     claims[wid] = place.n
     write_claims(st, claims)
-    st.pop("sol_districts", None)
+    recount(st)
     put_at(st, place, wid, slot_for(place, district(st, place), drop, aspect))
 
     with moving():
@@ -1411,7 +1486,7 @@ def windows_word(n):
 # burn more CPU than the whole canvas. So the plates read one small file, and
 # `sol here` — which waybar already runs once a second, and which has the
 # census in hand anyway — is what writes it.
-PLATES = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-plates")
+PLATES = runtime("sol-plates")
 
 
 def held(n):
@@ -1460,7 +1535,7 @@ def cmd_plate(args):
 # for it. `sol here` is the one that asks — it already runs once a second for
 # the plates — and it leaves the finished JSON in one file for the others to
 # read. `sol bar strip` is then a seek and a print: no IPC, no state, no cost.
-BAR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-bar")
+BAR = runtime("sol-bar")
 # where/holding/strip/last first, then one line per planet — the bar's strip
 # is eight separate buttons now, because the muscle memory for "click a
 # number, go to that workspace" lives in the bar and nowhere else, and a
@@ -1473,7 +1548,7 @@ BAR_PARTS = ("where", "holding", "strip", "last",
 # menu, the command line itself — so the bottom of the screen is a record of
 # what just happened rather than a strip of wasted pixels. The ones that poll
 # say nothing, or the footer would only ever read "here".
-LOG = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sol-last")
+LOG = runtime("sol-last")
 # `prompt` is quiet because it records the command you typed into it, and
 # main() must not then overwrite that with the word "prompt". `first-light`
 # and `tour` are quiet because they write the footer themselves — the first
@@ -1598,6 +1673,7 @@ def last_run():
             else "%dm ago" % int(age / 60))
     return "%s · %s" % (said, when)
 
+
 RING = "①②③④⑤⑥⑦⑧"          # a planet, as the key that flies you to it
 SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"          # its tally, small enough to read as a badge
 DIMC = "#3b4261"            # an empty planet: present, but not asking for you
@@ -1719,7 +1795,6 @@ def cmd_here(args):
 def cmd_list(args):
     d = Drift()
     st = d.state()
-    counts = census(st)
     total = len(real_windows(st))
     for p in PLACES:
         wins = district(st, p)
@@ -1762,8 +1837,8 @@ def cmd_prompt(args):
 
         readline.set_completer(complete)
         readline.parse_and_bind("tab: complete")
-    except Exception:
-        pass
+    except ImportError:
+        pass                    # a python built without readline: no completion
 
     sys.stdout.write("\033[?25h")
     sys.stdout.flush()
@@ -1905,8 +1980,8 @@ def machine():
         said = subprocess.run(["driftwm", "--version"], capture_output=True,
                               text=True, timeout=1).stdout.split()
         what = " ".join(said[:2]) or what
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError):
+        pass                    # not on PATH, or too slow to answer: say driftwm
     return "%s  ·  %s" % (who, what)
 
 
@@ -2036,7 +2111,7 @@ def cmd_doctor(args):
         import ctypes
         ctypes.CDLL("libgtk-layer-shell.so.0")
         row(OK, "GTK 3 + gtk-layer-shell (the ☉ and context menus)")
-    except Exception:
+    except (ImportError, ValueError, OSError):
         row(BAD, "python3-gi or libgtk-layer-shell missing — right-click has nothing to open")
 
     for cmd_name, why in (("foot", "every terminal surface"), ("waybar", "the bar"),
@@ -2057,8 +2132,9 @@ def cmd_doctor(args):
     except OSError:
         pass
     row(OK if pad else WARN,
-        "touchpad" + ("" if pad else " not found — the four-finger layer is idle; "
-                                    "the bar's buttons and the keys do everything it does"))
+        "touchpad" + ("" if pad else
+                      " not found — the four-finger layer is idle; the bar's "
+                      "buttons and the keys do everything it does"))
 
     # Can this session take the machine down? logind grants that to the active
     # session on a local seat and challenges everyone else, and a challenge
@@ -2113,8 +2189,7 @@ def cmd_doctor(args):
         "boots into sol" if wired else
         "nothing starts sol at boot — install.sh can wire the console, or run "
         "`sudo driftwm-up` on a spare VT")
-    log = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp",
-                       "sol-session.log")
+    log = runtime("sol-session.log")
     if os.path.exists(log):
         row(OK, "session log at %s" % log)
 
@@ -2357,8 +2432,8 @@ def cell_aspect():
             "HHHH", fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, b"\0" * 8))
         if rows and cols and xp and yp:
             return max(1.2, min(3.5, (yp / rows) / (xp / cols)))
-    except Exception:
-        pass
+    except (ImportError, OSError, struct.error):
+        pass                    # not a tty, or one that will not say: use 2.2
     return 2.2
 
 
@@ -2491,8 +2566,8 @@ def cmd_map(args):
     try:
         old = termios.tcgetattr(fd)
         tty.setcbreak(fd)
-    except Exception:
-        old = None
+    except (termios.error, OSError):
+        old = None              # stdin is not a terminal: draw once, read nothing
     sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[?1006h\033[?1000h")
 
     st0 = d.state()

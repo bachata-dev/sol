@@ -46,6 +46,7 @@ MT_SLOT, MT_X, MT_Y, MT_ID = 0x2F, 0x35, 0x36, 0x39
 PROP_POINTER, PROP_BUTTONPAD = 0x00, 0x02
 KEY_LEFTALT = 56
 
+
 # ── uinput ioctls, derived rather than hardcoded ──────────────────────────
 def _IOW(nr, size):
     return (1 << 30) | (size << 16) | (ord("U") << 8) | nr

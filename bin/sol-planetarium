@@ -58,6 +58,7 @@ while :; do
 
     theta=$(awk -v t="$theta" -v p="$PERIOD" -v k="$TICK" 'BEGIN { print t + 6.2831853 / p * k }')
     last_set=$(awk -v t="$theta" -v r="$ORBIT_R" 'BEGIN { printf "%.1f %.1f", r * cos(t), r * sin(t) }')
+    # shellcheck disable=SC2086  # "x y" is two arguments on purpose
     driftwm msg camera $last_set > /dev/null 2>&1
     sleep "$TICK"
     continue
@@ -82,6 +83,7 @@ while :; do
   theta=$(awk -v c="$CAM" 'BEGIN { split(c, a, " "); print atan2(a[2], a[1]) }')
   driftwm msg zoom 0.5 > /dev/null 2>&1
   last_set=$(awk -v t="$theta" -v r="$ORBIT_R" 'BEGIN { printf "%.1f %.1f", r * cos(t), r * sin(t) }')
+  # shellcheck disable=SC2086  # "x y" is two arguments on purpose
   driftwm msg camera $last_set > /dev/null 2>&1
   sleep 1
 done

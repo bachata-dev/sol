@@ -156,8 +156,8 @@ class Probe:
     def poll(self):
         try:
             me = self.find()
-        except Exception:
-            me = None
+        except (OSError, ValueError):
+            me = None           # the socket or its answer; try again next tick
         if me and me["size"][0] > 0 and me["size"][1] > 0:
             at = tuple(me["position"])
             if at == self.seen:
@@ -532,8 +532,8 @@ class Menu:
         try:
             out = sol.active_output(self.d.state())
             (cx, cy), z = out["camera"], out["zoom"]
-        except Exception:
-            return True
+        except (OSError, ValueError, KeyError):
+            return True         # cannot tell whether it moved: leave it open
         (wx, wy), wz = self.watch
         if abs(cx - wx) > 1.0 or abs(cy - wy) > 1.0 or abs(z - wz) > 0.001:
             Gtk.main_quit()
