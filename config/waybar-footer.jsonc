@@ -21,10 +21,16 @@
     "tooltip": false
   },
 
+  // Signalled by `sol watch` along with the rest of the bar, and reading the
+  // same file — a sed rather than a Python interpreter, and only when there
+  // is something new to say. This line changes more often than the others
+  // (it counts the seconds since sol last did something), which is exactly
+  // why it should not have been the one polling hardest.
   "custom/last": {
-    "exec": "sol bar last",
+    "exec": "sed -n 4p $XDG_RUNTIME_DIR/sol-bar",
     "return-type": "json",
-    "interval": 2,
+    "signal": 8,
+    "interval": 60,
     "on-click": "sol-cmd"
   }
 }

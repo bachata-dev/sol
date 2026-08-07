@@ -35,10 +35,10 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol help [--hold]            keybinding card
 """
 
-import glob
 import json
 import math
 import os
+import signal
 import socket
 import sys
 import time
@@ -102,9 +102,32 @@ def runtime(name):
 
 
 # ── IPC ───────────────────────────────────────────────────────────────────
+def sockets():
+    """Every driftwm IPC socket on the machine, in a stable order.
+
+    Spelled out rather than handed to glob(), which costs six milliseconds of
+    import — it pulls in re, fnmatch and contextlib — on a command a
+    keybinding runs on every press. The pattern is two literal directory
+    levels and one prefix, which is less code written out than the import
+    costs to read it.
+    """
+    found = []
+    for user in os.listdir("/run/user"):
+        where = "/run/user/%s/driftwm" % user
+        try:
+            found += [os.path.join(where, name) for name in os.listdir(where)
+                      if name.startswith("ipc-") and name.endswith(".sock")]
+        except OSError:
+            continue                    # somebody else's, or gone since
+    return sorted(found)
+
+
 class Drift:
     def __init__(self):
-        socks = sorted(glob.glob("/run/user/*/driftwm/ipc-*.sock"))
+        try:
+            socks = sockets()
+        except OSError:
+            socks = []
         env = os.environ.get("DRIFTWM_SOCKET")
         path = env if env else (socks[0] if socks else None)
         if not path:
@@ -443,6 +466,30 @@ def write_map(path, mapping):
             json.dump({str(k): v for k, v in mapping.items()}, f)
     except OSError:
         pass
+
+
+def write_if_changed(path, text):
+    """Write only when the content is new, and say whether it was.
+
+    Three of sol's surfaces are files that something else is watching — the
+    bar, the name plates, the shader — and all three get rewritten far more
+    often than they actually change. Comparing first turns most of those
+    writes into a read; the answer is what tells the caller whether anybody
+    needs waking, which is the whole basis of the bar costing nothing when
+    nothing is happening.
+    """
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return False
+    except OSError:
+        pass                            # not there yet, or unreadable: write it
+    try:
+        with open(path, "w") as f:
+            f.write(text)
+        return True
+    except OSError:
+        return False
 
 
 def read_claims():
@@ -818,8 +865,21 @@ def frame(st, place, aspect_wh):
         x0, x1 = min(x0, px - pw / 2.0), max(x1, px + pw / 2.0)
         y0, y1 = min(y0, py - ph / 2.0), max(y1, py + ph / 2.0)
 
-    z = min(ow / max(x1 - x0, 1.0), oh / max(y1 - y0, 1.0)) * 0.92
-    return (x0 + x1) / 2.0, (y0 + y1) / 2.0, max(MIN_FRAME_ZOOM, min(WORK_ZOOM, z))
+    # Centre on the district, not on its union with the name plate — and then
+    # pull back far enough that the plate is in shot anyway.
+    #
+    # The plate is centred on the planet, and a planet sits at one edge of its
+    # district rather than in the middle of it: the grid is laid out *beside*
+    # the world, because the world is one cell of it. So the union of the two
+    # boxes has its centre somewhere off in the plate's direction, and every
+    # arrival puts the windows — the thing you came to look at — visibly off
+    # to one side. That is the kind of wrongness you notice immediately and
+    # cannot name, and it was worth two hundred pixels of it to find.
+    cx, cy = box[0], box[1]
+    hx = max(box[2], abs(x0 - cx), abs(x1 - cx))
+    hy = max(box[3], abs(y0 - cy), abs(y1 - cy))
+    z = min(ow / max(2.0 * hx, 1.0), oh / max(2.0 * hy, 1.0)) * 0.92
+    return cx, cy, max(MIN_FRAME_ZOOM, min(WORK_ZOOM, z))
 
 
 # ── Commands ──────────────────────────────────────────────────────────────
@@ -1210,8 +1270,51 @@ def shrug(doing, why):
     sys.stderr.flush()
 
 
+def refresh(d, st=None):
+    """Bring the bar and the plates up to date, and wake whoever shows them.
+
+    The two surfaces are written together because they are one thought — what
+    is where — and woken separately because they have different readers and
+    change at different times: the plates only when a district's count moves,
+    the bar also when the camera does.
+    """
+    st = d.state() if st is None else st
+    # The camera and the zoom come out of the state we already have. Asking
+    # for them separately is two more round trips for two numbers that are
+    # sitting in front of us, and on the watcher's beat that is four hundred
+    # needless exchanges a minute.
+    out = active_output(st)
+    cam = tuple(out.get("camera") or (0.0, 0.0))
+    z = out.get("zoom") or 1.0
+    place, on_it, n = whereabouts(st, cam, z)
+    if write_plates(st):
+        wake("plates", signal.SIGUSR1)
+    if write_bar(st, place, on_it, n, z)[1]:
+        wake("waybar", signal.SIGRTMIN + BAR_SIGNAL)
+
+
+# How often `sol watch` refreshes the bar, and why there are two answers.
+#
+# When the compositor has just told us something moved, the bar should follow
+# at once — but a drag delivers an event a frame, so redrawing ninety times a
+# second to say the same thing would be the polling this replaced, only
+# faster. BUSY is the floor between those two mistakes.
+#
+# When nothing is happening there is no event to answer, and the only thing
+# still changing is the footer counting the seconds since sol last did
+# something. That wants a clock, and the cheapest clock that keeps the text
+# honest is one tick a second — the rate the bar used to poll at, except that
+# this one is a single loop asking for state rather than twelve processes.
+BUSY, IDLE = 0.1, 1.0
+
+
 def cmd_watch(args):
-    """Finish the journey for any window you drop somewhere new."""
+    """Finish the journey for any window you drop somewhere new.
+
+    And keep the bar and the plates current, because this is the one process
+    that is already awake and already knows when the world moved. See
+    BAR_SIGNAL for why that job landed here.
+    """
     act, ear = Drift(), Drift()
     ear.f.write(b'"Subscribe"\n')
     ear.f.flush()
@@ -1224,6 +1327,7 @@ def cmd_watch(args):
     # different ideas that both wanted the same word, and the module-level one
     # is a function this loop would shadow.
     seen, unsettled, lift, focused = {}, {}, set(), None
+    beat = 0.0
     while True:
         try:
             states = stream.take(0.05)
@@ -1265,6 +1369,15 @@ def cmd_watch(args):
                 raise_up(act, wid)
             except Exception as e:
                 shrug("raising window %d" % wid, e)
+
+        # The bar and the plates: promptly when the world moved, lazily when
+        # it did not. See BUSY/IDLE.
+        if now - beat >= (BUSY if states else IDLE):
+            beat = now
+            try:
+                refresh(act, states[-1] if states else None)
+            except Exception as e:
+                shrug("refreshing the bar", e)
 
 
 def raise_up(d, wid):
@@ -1501,19 +1614,10 @@ def plate_line(p, n):
 
 
 def write_plates(st):
+    """Refresh the name plates, and say whether they actually moved."""
     counts = census(st)
     text = "".join(plate_line(p, counts.get(p.n, 0)) + "\n" for p in PLANETS)
-    try:
-        with open(PLATES) as f:
-            if f.read() == text:
-                return
-    except OSError:
-        pass
-    try:
-        with open(PLATES, "w") as f:
-            f.write(text)
-    except OSError:
-        pass
+    return write_if_changed(PLATES, text)
 
 
 def cmd_plate(args):
@@ -1536,6 +1640,77 @@ def cmd_plate(args):
 # the plates — and it leaves the finished JSON in one file for the others to
 # read. `sol bar strip` is then a seek and a print: no IPC, no state, no cost.
 BAR = runtime("sol-bar")
+
+# ── Waking the surfaces, rather than being asked ──────────────────────────
+# The bar used to be polled. Twelve waybar modules, once a second, each one a
+# shell and a sed to re-read a file that had not changed — nineteen processes
+# a second and five per cent of a core, spent almost entirely on discovering
+# that nothing had happened. On four cores that churn is not free, and it is
+# paid whether or not anybody is looking.
+#
+# So sol pushes instead. `sol watch` is already subscribed to the compositor
+# for the drag-catcher, so it is already awake and already knows when the
+# world moved: it writes the files and taps the readers on the shoulder, and
+# they read only when there is something new to read. Idle costs nothing, and
+# the bar stops being up to a second out of date — a click on ③ lights the
+# ring it belongs to now, rather than eventually.
+BAR_SIGNAL = 8            # waybar carries "signal": 8 on every sol module
+
+
+# Who is allowed to receive each nudge. Matching on the command line alone is
+# not enough and the difference is not cosmetic: a plate is `sh label.sh 3
+# EARTH home` running inside `foot -a planet-label-3 … label.sh 3 EARTH home`,
+# so the marker appears in both — and the default action for SIGUSR1 is to
+# terminate. Signalling on the command line alone would have closed all eight
+# plate windows every time a district's count changed. So the name of the
+# program itself has to agree too.
+READERS = {
+    "waybar": ("waybar", ("waybar",)),
+    "plates": ("label.sh", ("sh", "dash", "bash", "ash", "busybox")),
+}
+
+
+def waking(who, ttl=15.0, _seen={}):
+    """The processes to wake for `who`, looked up rarely.
+
+    Reading /proc is cheap but not free, and these readers are started once at
+    login and outlive everything, so the answer keeps. Re-checked now and then
+    rather than never, because waybar can be restarted underneath us, and a
+    bar that has quietly stopped updating is exactly the fault nobody reports
+    — they just say it feels broken.
+    """
+    now = time.time()
+    got = _seen.get(who)
+    if got and now - got[0] < ttl:
+        return got[1]
+    marker, comms = READERS[who]
+    want = marker.encode()
+    pids = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % entry, "rb") as f:
+                if want not in f.read():
+                    continue
+            with open("/proc/%s/comm" % entry) as f:
+                if f.read().strip() in comms:
+                    pids.append(int(entry))
+        except OSError:
+            continue                    # it ended while we were reading it
+    _seen[who] = (now, pids)
+    return pids
+
+
+def wake(who, sig):
+    """Tell whoever is showing this that it has changed."""
+    for pid in waking(who):
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass                        # gone since we looked; the next scan refinds it
+
+
 # where/holding/strip/last first, then one line per planet — the bar's strip
 # is eight separate buttons now, because the muscle memory for "click a
 # number, go to that workspace" lives in the bar and nowhere else, and a
@@ -1744,18 +1919,7 @@ def write_bar(st, place, on_it, n, z):
                                                             " · %d" % c if c else "",
                                                             p.n)})
     text = "\n".join(json.dumps(o) for o in lines) + "\n"
-    try:
-        with open(BAR) as f:
-            if f.read() == text:
-                return text
-    except OSError:
-        pass
-    try:
-        with open(BAR, "w") as f:
-            f.write(text)
-    except OSError:
-        pass
-    return text
+    return text, write_if_changed(BAR, text)
 
 
 def cmd_bar(args):
@@ -1776,7 +1940,7 @@ def cmd_here(args):
     z = d.zoom()
     place, on_it, n = whereabouts(st, d.camera(), z)
     write_plates(st)          # the heartbeat that keeps the name plates current
-    bar = write_bar(st, place, on_it, n, z)
+    bar, _ = write_bar(st, place, on_it, n, z)
 
     if place is None:
         role, label = "all eight planets", "the system"

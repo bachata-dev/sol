@@ -33,18 +33,25 @@
     "tooltip": false
   },
 
-  // The only module that asks driftwm anything, once a second.
+  // Nothing here asks driftwm anything, and nothing here polls. `sol watch`
+  // is subscribed to the compositor already, so it writes $XDG_RUNTIME_DIR/
+  // sol-bar when the world moves and sends SIGRTMIN+8; every module below
+  // reads its own line out of that file when tapped, and sleeps otherwise.
+  // The interval is a safety net, not a heartbeat: if a signal is ever
+  // missed, or sol watch is not running, the bar still catches up.
   "custom/where": {
-    "exec": "sol here --waybar",
+    "exec": "sed -n 1p $XDG_RUNTIME_DIR/sol-bar",
     "return-type": "json",
-    "interval": 1,
+    "signal": 8,
+    "interval": 60,
     "on-click": "sol system",
     "on-click-right": "sol menu here"
   },
   "custom/holding": {
-    "exec": "sol bar holding",
+    "exec": "sed -n 2p $XDG_RUNTIME_DIR/sol-bar",
     "return-type": "json",
-    "interval": 1,
+    "signal": 8,
+    "interval": 60,
     "on-click": "sol arrange",
     "on-click-right": "sol-map"
   },
@@ -53,23 +60,24 @@
   // for "click a number, be on that workspace" lives in the bar, and nowhere
   // else. Each chip reads its line straight out of the file `sol here`
   // leaves behind (a sed, not an interpreter), flies you there on click, and
-  // still hops sunward / outward under the scroll wheel.
-  "custom/p1": { "exec": "sed -n 5p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  // still hops sunward / outward under the scroll wheel. Signalled, like
+  // everything else on this bar.
+  "custom/p1": { "exec": "sed -n 5p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 1", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p2": { "exec": "sed -n 6p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p2": { "exec": "sed -n 6p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 2", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p3": { "exec": "sed -n 7p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p3": { "exec": "sed -n 7p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 3", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p4": { "exec": "sed -n 8p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p4": { "exec": "sed -n 8p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 4", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
   "custom/belt": { "format": "┊", "tooltip": false },
-  "custom/p5": { "exec": "sed -n 9p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p5": { "exec": "sed -n 9p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 5", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p6": { "exec": "sed -n 10p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p6": { "exec": "sed -n 10p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 6", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p7": { "exec": "sed -n 11p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p7": { "exec": "sed -n 11p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 7", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
-  "custom/p8": { "exec": "sed -n 12p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "interval": 1,
+  "custom/p8": { "exec": "sed -n 12p $XDG_RUNTIME_DIR/sol-bar", "return-type": "json", "signal": 8, "interval": 60,
                  "on-click": "sol goto 8", "on-scroll-up": "sol hop in", "on-scroll-down": "sol hop out" },
 
   "custom/overview": {

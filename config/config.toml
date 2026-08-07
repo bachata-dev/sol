@@ -24,7 +24,11 @@ autostart = [
   # the footer: what sol last did, and the command line you can open over it
   "waybar -c ~/.config/driftwm/waybar-footer.jsonc -s ~/.config/driftwm/waybar.css",
   "mako",
-  # catches windows you drag from one planet to another
+  # Catches windows you drag from one planet to another — and, because it is
+  # the one process already subscribed to the compositor, writes the bar and
+  # the name plates and wakes them when they change. Without it the bar falls
+  # back to its own slow interval and drags stop being caught, so it is not
+  # optional in the way the rest of this list is.
   "sol watch",
   # the virgin session flies home, once ever — every session after wakes
   # wherever you left it, exactly as restore_camera promises
