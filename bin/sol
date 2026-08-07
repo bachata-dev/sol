@@ -893,6 +893,23 @@ def frame(st, place, aspect_wh):
     return cx, cy, max(MIN_FRAME_ZOOM, min(WORK_ZOOM, z))
 
 
+def land_on(st, w):
+    """(x, y, zoom) that drops you onto one window without losing the room.
+
+    Dead-centre at working zoom fills the screen with the window and nothing
+    else, and on a district whose grid is wider than the screen that takes the
+    planet, the name plate and every neighbour out of shot at once — you
+    arrive somewhere with no way to tell where you are. So it lands on the
+    window with a margin around it: enough that the edge of what else is here
+    stays in the frame, and never closer in than working zoom, because being
+    dropped in is the point.
+    """
+    (wx, wy), (ww, wh) = w["position"], w["size"]
+    ow, oh = screen(st)
+    z = min(ow / (ww * 1.35), oh / (wh * 1.35))
+    return float(wx), float(wy), max(MIN_FRAME_ZOOM, min(WORK_ZOOM, z))
+
+
 # ── Commands ──────────────────────────────────────────────────────────────
 def cmd_goto(args):
     p = find_place(args[0]) if args else None
@@ -912,7 +929,7 @@ def cmd_goto(args):
             if w:
                 d.focus(w["id"])
                 spotlight(d, st, w["id"])
-                fly(d, w["position"][0], w["position"][1], WORK_ZOOM)
+                fly(d, *land_on(st, w))
                 return
     fly(d, fx, fy, fz)
     if fz < WORK_ZOOM and p is not SUN:
@@ -1618,10 +1635,25 @@ def held(n):
     return "%d + %d" % (DECK, n - DECK) if n > DECK else "%d" % n
 
 
+# The plate terminal is created exactly this wide — see `-W 40x1` on the
+# planet-label commands in config.toml. Both halves of that number live in one
+# sentence on purpose: the plate is centred here, in the width the terminal is
+# known to be, rather than measured there at runtime. Asking the terminal how
+# wide it is turned out to be the one thing that could not be relied on — TERM
+# is inherited from the console, so tput answered for a screen eighty columns
+# wide, the padding overflowed a forty-column window, and the label wrapped and
+# scrolled its own first half off the top. A constant cannot do that.
+PLATE_COLS = 40
+
+
 def plate_line(p, n):
-    """The line a planet's name plate shows: "3  E A R T H  home · 10 + 7"."""
+    """The line a planet's name plate shows: "3  E A R T H  home · 10 + 7",
+    centred in the plate, because the plate is centred on the planet."""
     tail = "%s · %s" % (p.role, held(n)) if n else p.role
-    return "  %d   %s   \033[2m%s\033[0m" % (p.n, " ".join(p.name.upper()), tail)
+    name = " ".join(p.name.upper())
+    wide = len("%d   %s   %s" % (p.n, name, tail))       # the escapes do not print
+    pad = " " * max(0, (PLATE_COLS - wide) // 2)
+    return "%s%d   %s   \033[2m%s\033[0m" % (pad, p.n, name, tail)
 
 
 def write_plates(st):

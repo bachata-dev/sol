@@ -141,6 +141,20 @@ float orbit_line(float dist, float px) {
     return exp(-a / px) * 0.72 + exp(-a / (px * 5.0)) * 0.28;
 }
 
+// One orbit, with the cheap rejection done first. Every point on an ellipse
+// lies between its two semi-axes of its centre, so a pixel nearer than the
+// short one or further than the long one — by more than a hairline's reach —
+// cannot be on the curve, and one dot product says so. What that saves is the
+// gradient division in orbit_dist, paid eight times per pixel: zoomed into the
+// inner system every pixel used to evaluate Neptune's orbit to prove it was
+// nowhere near it.
+float ring(vec2 c, vec4 o, vec2 rot, float px) {
+    float r = length(c - o.xy);
+    float reach = px * 40.0;
+    if (r < min(o.z, o.w) - reach || r > max(o.z, o.w) + reach) return 0.0;
+    return orbit_line(orbit_dist(c, o, rot), px);
+}
+
 // What a planet's face is made of. Two numbers, because two are enough to
 // tell the kinds of world apart: gas giants are banded along their latitudes
 // and the rocky ones are blotched where their surfaces differ.
@@ -177,7 +191,19 @@ vec3 planet(vec2 c, vec2 p, float rad, vec3 tint, float bloom,
 // Neighbourhood halo, so a window parked at a planet sits in a pool of that
 // planet's colour when you pull back.
 vec3 halo(vec2 c, vec2 p, vec3 tint, float uf, float amt) {
-    return tint * exp(-dot(c - p, c - p) / (2.0 * POOL_R * POOL_R)) * uf * amt;
+    // Eight of these run for every pixel on a 4K screen, and seven of them are
+    // usually adding nothing: past three and a half sigma the gaussian is
+    // under a thousandth, which at these amplitudes is a long way below one
+    // step of an 8-bit channel. Rejecting there skips the exp() entirely.
+    //
+    // Honestly measured: about three points of GPU-busy, which is inside the
+    // noise of that counter — so this is here because it is plainly the right
+    // shape, not because it was shown to be faster. The cost of the whole
+    // background is dominated by drawing 4K at all, not by this arithmetic.
+    vec2 d = c - p;
+    float dd = dot(d, d);
+    if (dd > 12.25 * POOL_R * POOL_R) return vec3(0.0);        // (3.5 sigma)^2
+    return tint * exp(-dd / (2.0 * POOL_R * POOL_R)) * uf * amt;
 }
 
 // Signed distance to a rounded rectangle. (`ext` is the half-extent; `half`
@@ -196,9 +222,15 @@ float rrect(vec2 p, vec2 ext, float rad) {
 // the camera position is stateful truth the shader already receives, and
 // "the lights are on where you are" is how a district reads as the room
 // you are in rather than one more rectangle in the dark.
-vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here) {
+vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here, float rad) {
     if (d.z < 1.0) return vec3(0.0);
-    float s = rrect(c - d.xy, d.zw, 110.0);
+    // Rounded like the world it belongs to. The radius is the margin the card
+    // stands clear of its windows by (CARD_PAD, 70) plus the window's own
+    // corner (40) scaled by the planet — so Jupiter gets a generous room and
+    // Mercury a tight one, and Earth lands exactly on the 110 this was before
+    // it varied. Clamped to the box, because a corner larger than the
+    // rectangle it is rounding turns the rectangle inside out.
+    float s = rrect(c - d.xy, d.zw, min(rad, min(d.z, d.w)));
     float fill = 1.0 - smoothstep(-3.0, 3.0, s);
     float rim  = exp(-abs(s) / 34.0);
     return tint * (fill * 0.05 + rim * 0.14) * (0.40 + 0.60 * uf) * (1.0 + here * 0.9);
@@ -243,25 +275,27 @@ void main() {
 
     // Orbits
     float px = 1.5 / max(u_zoom, 0.04);
-    float rings = orbit_line(orbit_dist(c, O1, R1), px)
-                + orbit_line(orbit_dist(c, O2, R2), px)
-                + orbit_line(orbit_dist(c, O3, R3), px)
-                + orbit_line(orbit_dist(c, O4, R4), px)
-                + orbit_line(orbit_dist(c, O5, R5), px)
-                + orbit_line(orbit_dist(c, O6, R6), px)
-                + orbit_line(orbit_dist(c, O7, R7), px)
-                + orbit_line(orbit_dist(c, O8, R8), px);
+    float rings = ring(c, O1, R1, px) + ring(c, O2, R2, px)
+                + ring(c, O3, R3, px) + ring(c, O4, R4, px)
+                + ring(c, O5, R5, px) + ring(c, O6, R6, px)
+                + ring(c, O7, R7, px) + ring(c, O8, R8, px);
     col += ORBIT_COL * rings * (0.035 + uf * 0.10);
 
     // District cards, over the orbit lines and under everything else. The
     // card the camera is inside of is lifted: you can see which room you
     // are in from the light being on.
     vec2 cam = u_camera + size * 0.5;
-    col += card(c, D0, C0, uf, inside(cam, D0)) + card(c, D1, C1, uf, inside(cam, D1))
-         + card(c, D2, C2, uf, inside(cam, D2)) + card(c, D3, C3, uf, inside(cam, D3))
-         + card(c, D4, C4, uf, inside(cam, D4)) + card(c, D5, C5, uf, inside(cam, D5))
-         + card(c, D6, C6, uf, inside(cam, D6)) + card(c, D7, C7, uf, inside(cam, D7))
-         + card(c, D8, C8, uf, inside(cam, D8));
+    // 70 + 40 * body / 105 — the constant part is the margin, the varying part
+    // is the window corner scaled by the world. Earth is 110 by construction.
+    col += card(c, D0, C0, uf, inside(cam, D0), 261.0)
+         + card(c, D1, C1, uf, inside(cam, D1),  99.0)    // Mercury, the pebble
+         + card(c, D2, C2, uf, inside(cam, D2), 109.0)
+         + card(c, D3, C3, uf, inside(cam, D3), 110.0)    // Earth
+         + card(c, D4, C4, uf, inside(cam, D4), 102.0)
+         + card(c, D5, C5, uf, inside(cam, D5), 159.0)    // Jupiter, the giant
+         + card(c, D6, C6, uf, inside(cam, D6), 154.0)
+         + card(c, D7, C7, uf, inside(cam, D7), 133.0)
+         + card(c, D8, C8, uf, inside(cam, D8), 133.0);
 
     // Asteroid belt — a sparse annulus dividing the inner and outer system
     float band = 1.0 - smoothstep(90.0, 210.0, abs(r - BELT_R));
