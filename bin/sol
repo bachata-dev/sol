@@ -733,8 +733,19 @@ def tidy(d, st, place, aspect, plan=None):
 
     plate = plate_of(st, place)
     if plate:
-        top = place.y + (height / 2.0 if wins else 0.0)
-        y = top + PLATE_GAP + plate["size"][1] / 2.0 if wins else place.y + 400
+        # Clear of the top of the block as it was actually laid out — not of
+        # where the block would end if it were centred on the planet, which it
+        # is not. grid() anchors the planet's own cell on the planet, so the
+        # block hangs wherever that cell happens to sit within it, and on a
+        # district of any size the difference is hundreds of units: the name
+        # plate was landing in the middle of the grid, printed across two
+        # windows. The windows have just been moved, so their new positions
+        # are the honest answer and are already here to be asked.
+        if wins:
+            top = max(w["position"][1] + w["size"][1] / 2.0 for w in wins)
+            y = top + PLATE_GAP + plate["size"][1] / 2.0
+        else:
+            y = place.y + 400
         mine.append((plate["id"], tuple(plate["position"]), (place.x, y)))
         plate["position"] = [place.x, int(round(y))]
     if plan is None:
