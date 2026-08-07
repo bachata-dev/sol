@@ -23,8 +23,12 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol arrange [where|all]      tidy a planet's windows into a grid
   sol next / sol prev          step through the windows of this planet
   sol send <name|number>       send the focused window to a planet
+  sol back                     the camera to where it was before the last flight
+  sol find [word]              fly to a window by name, wherever it is
+  sol tidy                     gather, arrange every planet, sweep the overgrown
   sol gather [place]           bring every adrift window in (default: the Sun)
   sol sweep [from] [to]        drain a planet's stack to the archive
+  sol homes                    which app lives on which planet
   sol tour                     a narrated first flight; touch anything to stop
   sol doctor                   is this machine set up right? paste me in bug reports
   sol list                     what is where
@@ -218,6 +222,32 @@ def screen(st):
 
 
 # ── Smooth flight ─────────────────────────────────────────────────────────
+# Where the camera stood before this command moved it, so `sol back` can put
+# it back. Written by the first flight of a process and no later one, which is
+# exactly the right granularity for free: every sol command is its own
+# process, so "the first flight of this process" means "before mod+5", and a
+# five-leg tour leaves one mark rather than five.
+BACK = runtime("sol-back")
+_MARKED = []
+
+
+def mark(x, y, z):
+    """Remember where we are, once, before going somewhere else.
+
+    Given the numbers rather than the connection, because the only caller has
+    just read them for its own purposes: a breadcrumb is not worth a second
+    round trip on the one path where latency is felt.
+    """
+    if _MARKED:
+        return
+    _MARKED.append(True)
+    try:
+        with open(BACK, "w") as f:
+            f.write("%f %f %f\n" % (x, y, z))
+    except OSError:
+        pass                        # a missing breadcrumb is not worth a crash
+
+
 def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     """Glide the view to a point. Never jumps.
 
@@ -244,6 +274,7 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     """
     x0, y0 = d.camera()
     z0 = d.zoom()
+    mark(x0, y0, z0)               # a breadcrumb for `sol back`, once per command
     dist = math.hypot(tx - x0, ty - y0)
     zooming = abs(tz - z0) > 0.005
 
@@ -1057,6 +1088,154 @@ def cmd_tour(args):
     footer("the tour · mod+/ has every key")
 
 
+# ── Where an app lives ────────────────────────────────────────────────────
+# Its own file rather than a [sol] table in driftwm's config, and not by
+# preference: driftwm rejects unknown top-level tables, and a live
+# reload-config does not skip the section — it fails the whole parse. One
+# stray table would cost you every keybinding until you found it.
+SOL_TOML = os.path.expanduser("~/.config/driftwm/sol.toml")
+
+
+def homes():
+    """{app_id fragment: place} — which planet an app calls home.
+
+    Matched on a fragment of app_id rather than the whole of it, because a
+    browser calls itself `firefox` on one machine and `org.mozilla.firefox` on
+    the next, and nobody should have to find that out to file their browser on
+    Venus.
+    """
+    try:
+        import tomllib
+        with open(SOL_TOML, "rb") as f:
+            want = tomllib.load(f).get("homes") or {}
+    except (OSError, ValueError, ImportError, AttributeError):
+        return {}
+    found = {}
+    for app, where in want.items():
+        p = find_place(where)
+        if p is not None:
+            found[str(app).lower()] = p
+    return found
+
+
+def home_of(w, where):
+    """The place this window's app calls home, or None."""
+    app = str(w.get("app_id") or "").lower()
+    for fragment, p in where.items():
+        if fragment and fragment in app:
+            return p
+    return None
+
+
+def cmd_homes(args):
+    """Print what is filed where, and where it would go."""
+    where = homes()
+    if not where:
+        print("no homes set. Put them in %s:" % SOL_TOML)
+        print("\n  [homes]\n  slack = 2          # by number\n"
+              "  firefox = \"comms\"  # or by role\n  code = \"jupiter\"   # or by name")
+        return
+    for fragment, p in sorted(where.items(), key=lambda kv: kv[1].n):
+        print("  %-22s %d %s (%s)" % (fragment, p.n, p.name, p.role))
+
+
+def cmd_back(args):
+    """Return the camera to where it stood before the last flight.
+
+    The half of navigation nothing here had: every other verb is a place you
+    meant to go, and this is the one for the place you did not. A fat-fingered
+    mod+5 costs a keystroke to undo instead of a think about where you were.
+
+    It is a toggle, and that is not an accident — going back marks where it
+    left, so pressing it twice returns you, and holding two places in mind by
+    alternating between them is the oldest navigation habit there is.
+    """
+    try:
+        with open(BACK) as f:
+            x, y, z = (float(v) for v in f.read().split())
+    except (OSError, ValueError):
+        say("nowhere to go back to yet")
+        return
+    fly(Drift(), x, y, z)
+
+
+def cmd_find(args):
+    """Fly to a window by name, wherever it is.
+
+    The switcher goes to places; this goes to things. A district census is
+    decoration until you can act on it, and past about thirty windows "which
+    planet was that on" is a question you should be able to stop asking.
+    """
+    d = Drift()
+    st = d.state()
+
+    def row(w, where):
+        """The line you read, and the text it is searched by — which are not
+        the same thing. The columns are cut to fit a menu; matching against
+        what survived that cut means an app whose id is longer than the column
+        cannot be found by its own name, which is exactly the app you would
+        have gone looking for."""
+        shown = "%-9s %-14s %s" % (where, str(w.get("app_id"))[:14],
+                                   str(w.get("title", ""))[:52])
+        hay = ("%s %s %s" % (where, w.get("app_id") or "",
+                             w.get("title") or "")).lower()
+        return w, shown, hay
+
+    rows = [row(w, PLACES[n].name)
+            for n, wins in sorted(assignment(st).items()) for w in wins]
+    rows += [row(w, "adrift") for w in adrift(st)]
+    if not rows:
+        print("no windows on the canvas")
+        return
+    if args:                          # a word on the command line skips the menu
+        want = " ".join(args).lower()
+        hit = next((w for w, _, hay in rows if want in hay), None)
+        if hit is None:
+            sys.exit("sol find: nothing matching '%s'" % want)
+    else:
+        out = _pick([shown for _, shown, _ in rows], lines=min(len(rows), 14))
+        if not out:
+            return
+        hit = next((w for w, shown, _ in rows if shown == out), None)
+        if hit is None:
+            return
+    d.focus(hit["id"])
+    spotlight(d, st, hit["id"])
+    fly(d, *land_on(st, hit))
+    say("found %s" % (str(hit.get("title") or hit.get("app_id"))[:40]))
+
+
+def cmd_tidy(args):
+    """Put the whole canvas straight: nothing lost, nothing heaped, nothing
+    left in a pile it has outgrown.
+
+    One verb because it is one intention — "make it look like the screenshot
+    again" — and it is made entirely of verbs that already exist, in the only
+    order that makes sense: bring the lost in first so they are included in
+    what follows, tidy every district, then drain whatever is still overgrown
+    to the archive.
+    """
+    d = Drift()
+    lost = adrift(d.state())
+    if lost:
+        cmd_gather([])
+    cmd_arrange(["all"])
+    st = Drift().state()
+    drained = []
+    for p in PLANETS:
+        if p.role == "archive":
+            continue                  # the archive is where the overflow goes
+        if len(district(st, p)) > DECK:
+            cmd_sweep([str(p.n)])
+            drained.append(p.name)
+            st = Drift().state()
+    said = ["gathered %d" % len(lost)] if lost else []
+    said.append("tidied every planet")
+    if drained:
+        said.append("swept " + ", ".join(drained))
+    say("tidy · " + " · ".join(said))
+
+
 def cmd_arrange(args):
     """Tidy a district into a grid — the answer to ten terminals in a heap."""
     d = Drift()
@@ -1284,6 +1463,37 @@ class Stream:
         return out
 
 
+def send_home(d, st, w, where):
+    """Carry a newly-born window to the place its app lives.
+
+    Only ever at birth, and only if it is not already there — a window you
+    later drag to Mars stays on Mars, because a home is where a thing starts,
+    not a leash. It travels on the same arc a drag would take rather than
+    teleporting, for the same reason every other move here does: you should be
+    able to see that it happened, and where it went.
+
+    And it says so. The covenant is that the camera moves only when asked;
+    windows are held to the softer form of it — a thing may move on its own,
+    but it may not do so silently.
+    """
+    p = home_of(w, where)
+    if p is None:
+        return
+    at = tuple(w["position"])
+    if math.hypot(at[0] - p.x, at[1] - p.y) <= DISTRICT:
+        return                        # born at home, or near enough to belong
+    claims = read_claims()
+    claims[w["id"]] = p.n
+    write_claims(st, claims)
+    recount(st)
+    d.move(w["id"], p.x, p.y)
+    w["position"] = [p.x, p.y]
+    glide(d, [(w["id"], at, (p.x, p.y))], arc=ARC)
+    ow, oh = screen(st)
+    tidy(d, st, p, ow / oh)
+    footer("%s → %d %s" % (str(w.get("app_id"))[:20], p.n, p.name))
+
+
 def shrug(doing, why):
     """Survive a fault, but not in silence.
 
@@ -1317,8 +1527,23 @@ def refresh(d, st=None):
     place, on_it, n = whereabouts(st, cam, z)
     if write_plates(st):
         wake("plates", signal.SIGUSR1)
-    if write_bar(st, place, on_it, n, z)[1]:
-        wake("waybar", signal.SIGRTMIN + BAR_SIGNAL)
+
+    # Which half moved decides who is woken. Reading the bar back before
+    # rewriting it costs one small read on a once-a-second beat and saves
+    # eleven module re-runs every time the clock ticks and nothing else did.
+    try:
+        with open(BAR) as f:
+            before = f.read().split("\n")
+    except OSError:
+        before = []
+    text, changed = write_bar(st, place, on_it, n, z)
+    if changed:
+        after = text.split("\n")
+        clock = BAR_PARTS.index("last")
+        if before[:clock] != after[:clock] or before[clock + 1:] != after[clock + 1:]:
+            wake("waybar", signal.SIGRTMIN + BAR_SIGNAL)
+        if before[clock:clock + 1] != after[clock:clock + 1]:
+            wake("waybar", signal.SIGRTMIN + LAST_SIGNAL)
 
 
 # How often `sol watch` refreshes the bar, and why there are two answers.
@@ -1356,6 +1581,15 @@ def cmd_watch(args):
     # is a function this loop would shadow.
     seen, unsettled, lift, focused = {}, {}, set(), None
     beat = 0.0
+
+    # Which apps live where, and which windows were already here. Read once:
+    # this loop must not grow a file read per event, and a home is the kind of
+    # thing you set and forget. `known` is primed from the canvas as it stands
+    # so that starting the watcher does not decide every window on screen has
+    # just been born and sweep the lot of them somewhere.
+    where = homes()
+    known = {w["id"] for w in real_windows(act.state())}
+
     while True:
         try:
             states = stream.take(0.05)
@@ -1363,6 +1597,15 @@ def cmd_watch(args):
             return
         now = time.time()
         for st in states:
+            if where:
+                for w in real_windows(st):
+                    if w["id"] in known:
+                        continue
+                    known.add(w["id"])
+                    try:
+                        send_home(act, st, w, where)
+                    except Exception as e:
+                        shrug("sending window %d home" % w["id"], e)
             at_now = next((w["id"] for w in real_windows(st)
                            if w.get("is_focused")), None)
             if at_now is not None and at_now != focused:
@@ -1697,7 +1940,14 @@ BAR = runtime("sol-bar")
 # they read only when there is something new to read. Idle costs nothing, and
 # the bar stops being up to a second out of date — a click on ③ lights the
 # ring it belongs to now, rather than eventually.
-BAR_SIGNAL = 8            # waybar carries "signal": 8 on every sol module
+# Two signals, not one, and the difference is twenty-two processes a second.
+# The footer counts the seconds since sol last did something, so its line
+# changes every second for the minute and a half after any command — while the
+# other eleven modules say exactly what they said before. On one shared signal
+# that tick re-ran the whole bar: twelve shells and twelve seds, once a second,
+# to rewrite "3s ago" as "4s ago". The clock gets its own number.
+BAR_SIGNAL = 8            # where, holding, the strip, the eight chips
+LAST_SIGNAL = 9           # the footer alone, which ticks on its own
 
 
 # Who is allowed to receive each nudge. Matching on the command line alone is
@@ -1773,7 +2023,7 @@ LOG = runtime("sol-last")
 # so the fresh-install hint below survives the arrival, the second because
 # its whole narration runs through the footer.
 QUIET = {"here", "bar", "plate", "list", "watch", "map", "help", "menu",
-         "prompt", "first-light", "tour", "doctor"}
+         "prompt", "first-light", "tour", "doctor", "homes"}
 
 # What survives reboots: ~/.local/state/sol. The runtime files above are
 # per-boot on purpose; these two facts are not. `first-light` is whether the
@@ -1804,7 +2054,8 @@ def key_of(argv):
     if cmd == "shift":
         return "mod+shift+←" if a.startswith("b") else "mod+shift+→"
     return {"system": "mod+u", "arrange": "mod+a", "next": "mod+n",
-            "prev": "mod+p", "dive": "pinch out"}.get(cmd, "")
+            "prev": "mod+p", "dive": "pinch out", "back": "mod+-",
+            "find": "mod+shift+f", "tidy": "mod+shift+a"}.get(cmd, "")
 
 
 _SAY = []
@@ -2423,12 +2674,14 @@ HELP = """
    mod+left/right  sunward / outward   mod+q        close window
    mod+u           whole system view   mod+f        fullscreen
    mod+tab         fly-to menu         mod+m        maximise
-   mod+e           the overview        mod+/        this card
+   mod+shift+f     find a window       mod+/        this card
+   mod+e           the overview        mod+-        back where you were
 
    CARRY                               A CROWDED PLANET
    mod+ctrl+1 … 8  send window         mod+a        tidy into a grid
                    to that planet      mod+n/mod+p  step through them
                                        mod+N again  overview, then dive in
+                                       mod+shift+a  tidy the whole canvas
 
    A planet with more windows than fit the screen is framed whole when
    you fly to it; press the same key again to drop into your window.
@@ -2908,6 +3161,7 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "watch": cmd_watch, "prompt": cmd_prompt,
         "gather": cmd_gather, "sweep": cmd_sweep, "tour": cmd_tour,
         "doctor": cmd_doctor, "first-light": cmd_first_light,
+        "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 

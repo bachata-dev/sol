@@ -474,6 +474,136 @@ def test_doctor(mod):
           out[-300:])
 
 
+def camera(mod):
+    d = mod.Drift()
+    return tuple(mod.active_output(d.state())["camera"])
+
+
+def near(a, b, slack=2.0):
+    """Cameras are floats with easing behind them; -471 comes back as
+    -470.9999999999998 and that is arrival, not failure."""
+    return abs(a[0] - b[0]) <= slack and abs(a[1] - b[1]) <= slack
+
+
+def test_new_verbs(mod):
+    print("\n12. back, find, tidy, homes")
+    sol("goto", "3")
+    time.sleep(2.2)
+    at_earth = camera(mod)
+    sol("goto", "8")
+    time.sleep(2.2)
+    at_neptune = camera(mod)
+    check("goto moved the camera", not near(at_earth, at_neptune))
+
+    r = sol("back")
+    time.sleep(2.2)
+    check("sol back exits 0", r.returncode == 0, r.stderr[:150])
+    check("back returns to where the flight started",
+          near(camera(mod), at_earth), "%s vs %s" % (camera(mod), at_earth))
+    sol("back")
+    time.sleep(2.2)
+    check("back is a toggle — twice returns you",
+          near(camera(mod), at_neptune), "%s vs %s" % (camera(mod), at_neptune))
+
+    # find, by word, with no menu involved. Its own app_id, because two
+    # windows sharing one is a legal canvas and "the" one would be a coin toss.
+    sol("goto", "3")
+    time.sleep(2.2)
+    script = os.path.join(tempfile.mkdtemp(), "findme.sh")
+    open(script, "w").write("#!/bin/sh\nexec foot -a acceptance-findme "
+                            "-e sh -c 'while :; do sleep 1; done'\n")
+    os.chmod(script, 0o755)
+    msg("action", "spawn", script)
+    time.sleep(3)
+    target = next((w for w in state()["windows"]
+                   if w.get("app_id") == "acceptance-findme"), None)
+    if check("a window to find", target is not None):
+        _spawned.append(target["id"])
+        r = sol("find", "acceptance-findme")
+        time.sleep(2.5)
+        check("sol find exits 0", r.returncode == 0, r.stderr[:150])
+        found = next((w for w in state()["windows"]
+                      if w["id"] == target["id"]), {})
+        check("find focused the window it was asked for",
+              found.get("is_focused") is True)
+        check("find flew to it",
+              near(camera(mod), tuple(found.get("position") or (0, 0)), slack=900),
+              "%s vs %s" % (camera(mod), tuple(found.get("position") or ())))
+    r = sol("find", "no-such-window-anywhere")
+    check("find refuses a word that matches nothing", r.returncode != 0)
+
+    # tidy: one verb for the whole canvas
+    ids = spawn(2)
+    if ids:
+        msg("move", "--id", str(ids[0]), "--", "70000", "70000")
+        time.sleep(2.0)
+        check("a window flung into deep space is adrift",
+              len(mod.adrift(state())) >= 1)
+        r = sol("tidy", timeout=90)
+        time.sleep(6)
+        check("sol tidy exits 0", r.returncode == 0, r.stderr[:150])
+        check("nothing is adrift after tidy", not mod.adrift(state()),
+              [w["id"] for w in mod.adrift(state())])
+
+    r = sol("homes")
+    check("sol homes exits 0", r.returncode == 0, r.stderr[:150])
+    check("homes explains itself when none are set",
+          "sol.toml" in r.stdout or "Jupiter" in r.stdout, r.stdout[:150])
+
+
+def test_homes_routing(mod):
+    """The one that needs the watcher restarted, so it stands on its own."""
+    print("\n13. an app going home (restarts the watcher)")
+    conf = os.path.expanduser("~/.config/driftwm/sol.toml")
+    saved = open(conf).read() if os.path.exists(conf) else None
+    watcher = None
+    try:
+        open(conf, "w").write("[homes]\nacceptance-home = 5\n")
+        run("pkill", "-f", "sol watc[h]")
+        time.sleep(0.6)
+        watcher = subprocess.Popen([SOL, "watch"], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.PIPE, text=True)
+        time.sleep(2.5)
+        sol("goto", "3")
+        time.sleep(2.2)
+        before = camera(mod)
+
+        script = os.path.join(tempfile.mkdtemp(), "born.sh")
+        open(script, "w").write("#!/bin/sh\nexec foot -a acceptance-home "
+                                "-e sh -c 'while :; do sleep 1; done'\n")
+        os.chmod(script, 0o755)
+        msg("action", "spawn", script)
+        time.sleep(6)
+
+        st = state()
+        w = next((x for x in st["windows"]
+                  if x.get("app_id") == "acceptance-home"), None)
+        if check("the window opened", w is not None):
+            j = mod.PLANETS[4]
+            away = ((w["position"][0] - j.x) ** 2
+                    + (w["position"][1] - j.y) ** 2) ** 0.5
+            check("it travelled to the planet it calls home (%.0f from Jupiter)"
+                  % away, away <= mod.DISTRICT, tuple(w["position"]))
+            check("and the camera did not follow it",
+                  near(camera(mod), before), "%s vs %s" % (camera(mod), before))
+            _spawned.append(w["id"])
+    finally:
+        if saved is None:
+            os.path.exists(conf) and os.remove(conf)
+        else:
+            open(conf, "w").write(saved)
+        if watcher:
+            watcher.terminate()
+            try:
+                watcher.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                watcher.kill()
+        # hand the session's own watcher back
+        subprocess.run(["driftwm", "msg", "action", "spawn", "/tmp/startwatch.sh"],
+                       capture_output=True)
+        time.sleep(1.5)
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -483,6 +613,7 @@ def main():
         ("districts", test_districts), ("arrange", test_arrange),
         ("cards", test_cards), ("flight", test_flight),
         ("watch", test_watch), ("menu", test_menu), ("doctor", test_doctor),
+        ("verbs", test_new_verbs), ("homes", test_homes_routing),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))

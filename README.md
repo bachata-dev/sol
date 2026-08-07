@@ -344,8 +344,12 @@ sol system        # frame the whole solar system
 sol arrange       # tidy this planet's windows; `sol arrange all` does every one
 sol next          # step to the next window here; `sol prev` goes back
 sol send 8        # send the focused window to Neptune; `--stay` to not follow
+sol back          # the camera to where it was before the last flight (it toggles)
+sol find          # fly to a window by name, wherever it is; `sol find slack` skips the menu
+sol tidy          # gather the lost, arrange every planet, sweep the overgrown — one verb
 sol gather        # bring every adrift window in; `sol gather 8` files them on Neptune
 sol sweep         # drain this planet's stack to the archive; `sol sweep 5 2` names both
+sol homes         # which app lives on which planet
 sol tour          # a narrated first flight; touch anything and it yields
 sol doctor        # is this machine set up right? paste it into bug reports
 sol list          # what is where
@@ -360,6 +364,25 @@ sol shift back    # move the focused window a slot along its grid
 sol watch         # catch windows dragged between planets (runs from autostart)
 sol help          # the keybinding card
 ```
+
+## Where an app lives
+
+Put an app on a planet and every window it opens goes there — once, when it opens,
+on the same arc a drag would take, with the footer saying so. A window you later move
+stays where you moved it: a home is where a thing starts, not a leash.
+
+```toml
+# ~/.config/driftwm/sol.toml
+[homes]
+slack   = 2         # by number
+firefox = "comms"   # or by role
+code    = "jupiter" # or by name
+```
+
+The key matches any part of the window's `app_id`, because a browser calls itself
+`firefox` on one machine and `org.mozilla.firefox` on the next. `sol homes` prints what
+is filed where. This is sol's own file rather than a section of driftwm's config, because
+driftwm rejects unknown tables — a stray one there fails the whole parse on reload.
 
 ## Opt-in extras
 

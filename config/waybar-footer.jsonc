@@ -29,7 +29,10 @@
   "custom/last": {
     "exec": "sed -n 4p $XDG_RUNTIME_DIR/sol-bar",
     "return-type": "json",
-    "signal": 8,
+    // Its own signal: this line ticks every second while the footer is
+    // counting, and waking the other eleven modules to watch it do that was
+    // twenty-two processes a second of nothing happening.
+    "signal": 9,
     "interval": 60,
     "on-click": "sol-cmd"
   }

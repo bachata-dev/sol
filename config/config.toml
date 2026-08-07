@@ -124,6 +124,8 @@ animate_fps = 30
 "mod+right" = "spawn sol hop out"
 "mod+u" = "spawn sol system"
 "mod+tab" = "spawn sol menu go"     # the switcher: type a place, go
+"mod+shift+f" = "spawn sol find"   # ... and the one for things, not places
+"mod+minus" = "spawn sol back"     # where the camera was before the last flight
 "mod+slash" = "spawn sol-help"
 "mod+e" = "spawn sol-map"          # the overview: everything, named, on demand
 "mod+semicolon" = "spawn sol-cmd"  # the command line, in the footer
@@ -134,6 +136,9 @@ animate_fps = 30
 "mod+a" = "spawn sol arrange"
 "mod+n" = "spawn sol next"
 "mod+p" = "spawn sol prev"
+# and the whole canvas at once: gather what is lost, tidy every planet, drain
+# whatever is still overgrown to the archive
+"mod+shift+a" = "spawn sol tidy"
 # and move the focused window along the grid it is in
 "mod+shift+left" = "spawn sol shift back"
 "mod+shift+right" = "spawn sol shift forward"

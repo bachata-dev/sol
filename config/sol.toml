@@ -1,0 +1,32 @@
+# sol's own settings.
+#
+# Its own file rather than a [sol] table in driftwm's config.toml, and not by
+# preference: driftwm rejects unknown top-level tables outright, and a live
+# reload-config does not skip the offending section — it fails the whole parse.
+# One stray table would cost you every keybinding until you found it.
+#
+# Nothing here is required. With this file absent, or with [homes] empty, sol
+# behaves exactly as it always has.
+
+# ── Where an app lives ────────────────────────────────────────────────────
+# A window born anywhere is carried to the planet its app calls home — once,
+# when it opens, on the same arc a drag would take, and the footer says so.
+#
+# Only at birth. A window you later drag to Mars stays on Mars: a home is
+# where a thing starts, not a leash. And only if it was not already there, so
+# an app that opens where it belongs is left alone.
+#
+# The key is matched against any part of the window's app_id, because a
+# browser calls itself `firefox` on one machine and `org.mozilla.firefox` on
+# the next, and nobody should have to find that out to file it on Venus. The
+# value is a planet by number, by name, or by the role on its name plate.
+#
+# Uncomment and make them yours:
+#
+[homes]
+# slack     = 2          # by number
+# thunderbird = "comms"  # or by role — 2 Venus
+# firefox   = "venus"    # or by name
+# code      = "builds"   # 5 Jupiter
+# spotify   = "media"    # 6 Saturn
+# obs       = 6
