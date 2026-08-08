@@ -1478,10 +1478,10 @@ def send_home(d, st, w, where):
     """
     p = home_of(w, where)
     if p is None:
-        return
+        return False
     at = tuple(w["position"])
     if math.hypot(at[0] - p.x, at[1] - p.y) <= DISTRICT:
-        return                        # born at home, or near enough to belong
+        return False                  # born at home, or near enough to belong
     claims = read_claims()
     claims[w["id"]] = p.n
     write_claims(st, claims)
@@ -1491,7 +1491,61 @@ def send_home(d, st, w, where):
     glide(d, [(w["id"], at, (p.x, p.y))], arc=ARC)
     ow, oh = screen(st)
     tidy(d, st, p, ow / oh)
+    write_plates(st)
+    write_cards(d, st)               # a district that gained a window grew
     footer("%s → %d %s" % (str(w.get("app_id"))[:20], p.n, p.name))
+    return True                       # dealt with; nobody else need tidy it
+
+
+def settle_in(d, st, w):
+    """A window has just opened somewhere: fold it into that district's grid.
+
+    Without this a new terminal lands wherever the cursor was and the tidy
+    district you were looking at becomes a tidy district with one window
+    sitting across it. The grid is the district's resting state, so returning
+    to it is not a rearrangement — it is the district closing over what just
+    arrived.
+    """
+    place = belongs_to(w, read_claims())
+    if place is None:
+        return False                  # born in deep space; `sol gather` is for that
+    ow, oh = screen(st)
+    recount(st)
+    tidy(d, st, place, ow / oh)
+    # The card is how a district says how big it is, so it has to be told the
+    # grid just grew. Without this the window is filed correctly and *looks*
+    # like it is not: it sits outside the rounded card that is supposed to
+    # contain it, which is the one thing the card exists to deny.
+    write_plates(st)
+    write_cards(d, st)
+    return True
+
+
+def unmaximised(d, st, w):
+    """A window has come back from filling the screen. Put the room straight.
+
+    driftwm's fit-window resizes to the viewport, centres on the window and
+    resets the zoom — and restoring gives the size back but leaves the camera
+    where the maximise put it, looking at one window at working zoom with the
+    district scattered around it off-screen. So coming back means both halves:
+    lay the grid out again for the size it is now, and frame the place.
+
+    The camera moving here is asked-for, in the sense the covenant means: it
+    is the answer to a key you pressed, not something that happened while you
+    were reading.
+    """
+    place = belongs_to(w, read_claims())
+    if place is None:
+        return
+    ow, oh = screen(st)
+    recount(st)
+    tidy(d, st, place, ow / oh)
+    write_plates(st)
+    write_cards(d, st)               # the grid just changed size; so did the card
+    st.pop("sol_districts", None)
+    fresh = d.state()
+    fly(d, *frame(fresh, place, (ow, oh)))
+    footer("back from full · %d %s" % (place.n, place.name))
 
 
 def shrug(doing, why):
@@ -1560,6 +1614,17 @@ def refresh(d, st=None):
 # this one is a single loop asking for state rather than twelve processes.
 BUSY, IDLE = 0.1, 1.0
 
+# What "it was filling the screen" means. driftwm's fit-window leaves room for
+# the bar and the decoration, so a maximised window measured 1896x1000 of a
+# 1920x1080 viewport — 0.99 of the width but only 0.93 of the height, which is
+# why this is not 0.95 and certainly not 1.0.
+#
+# SNAP is the other half, and it is what keeps an ordinary drag-resize out:
+# coming back from maximised is one enormous step (1896 -> 700 here, a third of
+# the width), while dragging an edge arrives as a stream of small ones. Both
+# tests have to pass, so nothing but a restore looks like a restore.
+FULL, SNAP = 0.85, 0.8
+
 
 def cmd_watch(args):
     """Finish the journey for any window you drop somewhere new.
@@ -1588,7 +1653,11 @@ def cmd_watch(args):
     # so that starting the watcher does not decide every window on screen has
     # just been born and sweep the lot of them somewhere.
     where = homes()
-    known = {w["id"] for w in real_windows(act.state())}
+    prime = real_windows(act.state())
+    known = {w["id"] for w in prime}
+    # Sizes, so that a window coming back from filling the screen can be told
+    # from one that merely opened. Primed for the same reason `known` is.
+    sizes = {w["id"]: tuple(w["size"]) for w in prime}
 
     while True:
         try:
@@ -1597,15 +1666,45 @@ def cmd_watch(args):
             return
         now = time.time()
         for st in states:
-            if where:
-                for w in real_windows(st):
-                    if w["id"] in known:
+            # Windows that have just arrived, and windows that have just
+            # stopped filling the screen. Both are the same shape of event —
+            # something changed and the district should close over it — and
+            # both are cheap to spot from the state already in hand.
+            ow, oh = screen(st)
+            for w in real_windows(st):
+                wid, big = w["id"], tuple(w["size"])
+                if wid not in known:
+                    # A window is announced before it has a size: the state
+                    # that first mentions it says 0x0, and the real size
+                    # follows about a frame later. Settling on that lays the
+                    # grid out around a window of no width — the block picks
+                    # the wrong shape, and the card is drawn too small for
+                    # what is about to appear inside it. So let it go by; the
+                    # next state carries the same window with its size, and
+                    # this branch is what it will find then.
+                    if big[0] <= 0 or big[1] <= 0:
                         continue
-                    known.add(w["id"])
+                    known.add(wid)
+                    sizes[wid] = big
                     try:
-                        send_home(act, st, w, where)
+                        if not (where and send_home(act, st, w, where)):
+                            if settle_in(act, st, w):
+                                footer("%s arrived · mod+a" %
+                                       str(w.get("app_id"))[:20])
                     except Exception as e:
-                        shrug("sending window %d home" % w["id"], e)
+                        shrug("settling the new window %d" % wid, e)
+                    continue
+                was = sizes.get(wid)
+                sizes[wid] = big
+                # Shrinking back from something that filled the viewport is
+                # the un-maximise; an ordinary drag-resize is not, and must
+                # not yank the camera. FULL is how sure we insist on being.
+                if was and was[0] >= ow * FULL and was[1] >= oh * FULL \
+                        and big[0] <= was[0] * SNAP:
+                    try:
+                        unmaximised(act, st, w)
+                    except Exception as e:
+                        shrug("restoring after full screen for %d" % wid, e)
             at_now = next((w["id"] for w in real_windows(st)
                            if w.get("is_focused")), None)
             if at_now is not None and at_now != focused:

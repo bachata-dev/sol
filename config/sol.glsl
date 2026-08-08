@@ -226,10 +226,10 @@ vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here, float rad) {
     if (d.z < 1.0) return vec3(0.0);
     // Rounded like the world it belongs to. The radius is the margin the card
     // stands clear of its windows by (CARD_PAD, 70) plus the window's own
-    // corner (40) scaled by the planet — so Jupiter gets a generous room and
-    // Mercury a tight one, and Earth lands exactly on the 110 this was before
-    // it varied. Clamped to the box, because a corner larger than the
-    // rectangle it is rounding turns the rectangle inside out.
+    // corner (24) scaled by the planet — so Jupiter still gets the more
+    // generous room and Mercury the tighter one, the spread between them just
+    // narrows as the window corner comes down. Clamped to the box, because a
+    // corner larger than the rectangle it is rounding turns it inside out.
     float s = rrect(c - d.xy, d.zw, min(rad, min(d.z, d.w)));
     float fill = 1.0 - smoothstep(-3.0, 3.0, s);
     float rim  = exp(-abs(s) / 34.0);
@@ -285,17 +285,19 @@ void main() {
     // card the camera is inside of is lifted: you can see which room you
     // are in from the light being on.
     vec2 cam = u_camera + size * 0.5;
-    // 70 + 40 * body / 105 — the constant part is the margin, the varying part
-    // is the window corner scaled by the world. Earth is 110 by construction.
-    col += card(c, D0, C0, uf, inside(cam, D0), 261.0)
-         + card(c, D1, C1, uf, inside(cam, D1),  99.0)    // Mercury, the pebble
-         + card(c, D2, C2, uf, inside(cam, D2), 109.0)
-         + card(c, D3, C3, uf, inside(cam, D3), 110.0)    // Earth
-         + card(c, D4, C4, uf, inside(cam, D4), 102.0)
-         + card(c, D5, C5, uf, inside(cam, D5), 159.0)    // Jupiter, the giant
-         + card(c, D6, C6, uf, inside(cam, D6), 154.0)
-         + card(c, D7, C7, uf, inside(cam, D7), 133.0)
-         + card(c, D8, C8, uf, inside(cam, D8), 133.0);
+    // 70 + 24 * body / 105 — the constant part is the margin, the varying part
+    // is the window corner scaled by the world. Earth is 94 by construction.
+    // The 24 is decorations.corner_radius in config.toml and has to stay it:
+    // these nine numbers are that one number wearing the planets' sizes.
+    col += card(c, D0, C0, uf, inside(cam, D0), 185.0)
+         + card(c, D1, C1, uf, inside(cam, D1),  87.0)    // Mercury, the pebble
+         + card(c, D2, C2, uf, inside(cam, D2),  94.0)
+         + card(c, D3, C3, uf, inside(cam, D3),  94.0)    // Earth
+         + card(c, D4, C4, uf, inside(cam, D4),  89.0)
+         + card(c, D5, C5, uf, inside(cam, D5), 123.0)    // Jupiter, the giant
+         + card(c, D6, C6, uf, inside(cam, D6), 120.0)
+         + card(c, D7, C7, uf, inside(cam, D7), 108.0)
+         + card(c, D8, C8, uf, inside(cam, D8), 108.0);
 
     // Asteroid belt — a sparse annulus dividing the inner and outer system
     float band = 1.0 - smoothstep(90.0, 210.0, abs(r - BELT_R));

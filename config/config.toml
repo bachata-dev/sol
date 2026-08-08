@@ -78,14 +78,14 @@ interact_min = 0.45
 [decorations]
 bg_color = "#16161e"
 fg_color = "#c0caf5"
-# 40, not a taste guess: a rounded rectangle nested inside another with a
-# uniform gap only reads as concentric when its radius is the outer radius
-# less that gap. The district card is drawn at 110 and stands CARD_PAD = 70
-# clear of the outermost window, so 110 - 70 = 40 is the radius at which a
-# window's corner runs *parallel* to the card's instead of merely being
-# tighter than it. At 12 the windows read as dropped onto the card; at 40
-# they read as cut to fit it.
-corner_radius = 40
+# Less round than it was, and the card came down with it. A rounded rectangle
+# nested inside another with a uniform gap only reads as concentric when its
+# radius is the outer radius less that gap — so this number and the card radii
+# in sol.glsl are one decision, not two: card = CARD_PAD (70) + this, scaled by
+# the planet. Change it here and change them there, or the corners stop
+# agreeing. At 40 the windows read as pills; at 24 they are still visibly cut
+# to fit the card, but the corner has stopped being the loudest thing on it.
+corner_radius = 24
 shadow = true
 title_bar_height = 28
 font = "JetBrains Mono"
@@ -226,19 +226,18 @@ top_left = "spawn sol system"
 [[window_rules]]
 app_id = "foot"
 blur = true
-# No title bar. Every terminal wore one reading "foot", which is the only
-# genuinely generic-desktop object left in the frame — and it says nothing the
-# district does not already say better. "minimal" keeps the border, the corner
-# and the shadow; it drops only the strip along the top.
-decoration = "minimal"
+# The title bar is back, and with it somewhere to click to close. It was
+# dropped once for reading "foot" and saying nothing the district did not say
+# better — but a window you cannot close without knowing mod+q is a window
+# that only its author can use. The strip earns its 28px by being the answer
+# to "how do I get rid of this".
 
 # The terminal that opens on Earth (home). Its own app_id, so it does not
-# inherit the `foot` rule above — including the title bar it drops.
+# inherit the `foot` rule above.
 [[window_rules]]
 app_id = "home-term"
 position = [-471, 2553]
 size = [1200, 720]
-decoration = "minimal"
 blur = true
 
 # Planet name plates. Deliberately NOT widgets: driftwm limits how far you can
