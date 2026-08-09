@@ -1,3 +1,16 @@
+sol (1.0.1) unstable; urgency=medium
+
+  * focus: ask the windows, not only the screen. A client declares a minimum
+    size and driftwm clamps a Resize to it, so a window asked for a twelfth of
+    a screen can commit three times that and sit across its neighbours —
+    twelve real applications was twenty-four overlaps. Terminals shrink to
+    almost nothing and hid this completely. sol now reads back what was
+    actually committed, remembers it against the app_id, and lays out again
+    with fewer and larger tiles: one extra pass the first time an application
+    is met, and none ever after.
+
+ -- sol <noreply@github.com>  Sun, 09 Aug 2026 18:00:00 +0000
+
 sol (1.0.0) unstable; urgency=medium
 
   * First release.

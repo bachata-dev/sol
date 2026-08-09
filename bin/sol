@@ -91,7 +91,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -1536,7 +1536,68 @@ RESIZE_SETTLE = 0.45   # how long driftwm's geometry animation keeps arriving
 PICK_HOLD = 0.1
 
 
-def fits(n, width, height):
+# What each application would not shrink past, learned by asking it to.
+#
+# A client declares a minimum size and driftwm clamps a Resize to it, so a
+# window can be asked for a 470x330 cell and commit 644x716 — and then it is
+# not in its cell, it is across three of them. Terminals shrink to almost
+# nothing and hid this completely; GIMP, Inkscape and Okular do not, and
+# twelve tiles of them was twenty-four overlaps.
+#
+# There is no IPC to ask a window its minimum, so it is discovered the only
+# way available: lay out, read back what was actually committed, and remember
+# it against the app_id. Keyed by app rather than by window because it is a
+# fact about the program, and kept in the runtime directory because it is
+# also a fact about this build of it — a fresh boot may have a new version
+# with new ideas about how small it goes.
+FLOORS = runtime("sol-floors.json")
+
+
+def read_floors():
+    """{app_id: (width, height)} — the smallest each app has agreed to be."""
+    try:
+        with open(FLOORS) as f:
+            return {str(k): (float(v[0]), float(v[1]))
+                    for k, v in json.load(f).items()}
+    except (OSError, ValueError, TypeError, IndexError, KeyError):
+        return {}
+
+
+def floor_of(w, floors):
+    return floors.get(str(w.get("app_id") or ""), (0.0, 0.0))
+
+
+def learn_floors(st, asked):
+    """Write down every window that would not shrink to what it was asked for.
+
+    `asked` is {window id: (width, height)}. A window that came back bigger
+    than it was asked for has just told us its minimum, which is worth more
+    than the failed layout it cost: the next `mod+t` gets the tile count right
+    the first time.
+    """
+    floors, moved = read_floors(), False
+    for w in real_windows(st):
+        want = asked.get(w["id"])
+        if not want:
+            continue
+        got = (float(w["size"][0]), float(w["size"][1]))
+        if got[0] <= want[0] + SIZE_SLACK and got[1] <= want[1] + SIZE_SLACK:
+            continue
+        app = str(w.get("app_id") or "")
+        was = floors.get(app, (0.0, 0.0))
+        if got[0] > was[0] or got[1] > was[1]:
+            floors[app] = (max(got[0], was[0]), max(got[1], was[1]))
+            moved = True
+    if moved:
+        try:
+            with open(FLOORS, "w") as f:
+                json.dump({k: list(v) for k, v in floors.items()}, f)
+        except OSError:
+            pass
+    return floors
+
+
+def fits(n, width, height, wins=(), floors=None):
     """The most of `n` tiles this screen can hold at a size worth having.
 
     A screen that cannot hold them all should say so by holding fewer, not by
@@ -1556,12 +1617,29 @@ def fits(n, width, height):
     # question whose answer was twelve before we started.
     ceiling = max(1, int(width // MIN_TILE[0]) * int(height // MIN_TILE[1]))
     n = min(n, ceiling)
+    floors = floors or {}
     while n > 1:
-        if all(cw >= MIN_TILE[0] and ch >= MIN_TILE[1]
-               for _, _, cw, ch in panes(n, width, height)):
+        cells = panes(n, width, height)
+        if all(cw >= MIN_TILE[0] and ch >= MIN_TILE[1] for _, _, cw, ch in cells) \
+                and roomy(cells, wins[:n], floors):
             return n
         n -= 1
     return 1
+
+
+def roomy(cells, wins, floors):
+    """Would every one of these windows accept the cell it is being given?
+
+    MIN_TILE is sol's opinion about how small a window may usefully be; this
+    is the window's own, and it wins. A cell smaller than what the client will
+    agree to is not a smaller tile, it is a tile that overlaps its neighbours,
+    which is worse than the thing MIN_TILE exists to prevent.
+    """
+    for w, (_, _, cw, ch) in zip(wins, cells):
+        fw, fh = floor_of(w, floors)
+        if fw > cw + SIZE_SLACK or fh > ch + SIZE_SLACK:
+            return False
+    return True
 
 
 def park(place, wins, below):
@@ -1657,7 +1735,8 @@ def cmd_focus(args):
     if args and args[0].isdigit():
         n = max(1, min(n, int(args[0])))
     uw, uh = usable(st)
-    room = fits(n, uw, uh)
+    floors = read_floors()
+    room = fits(n, uw, uh, wins, floors)
     if room < n:
         # Said out loud rather than done quietly: the windows that did not fit
         # are still open and still counted, and a screen that silently held
@@ -1677,7 +1756,24 @@ def cmd_focus(args):
     # window you were last working in is nearly always one of the tiles.
     if not any(w.get("is_focused") for w in show):
         d.focus(show[0]["id"])
-    lay_focus(d, st, place, show, rest)
+    asked = lay_focus(d, st, place, show, rest)
+
+    # Ask the screen what actually happened. A client may refuse to be as
+    # small as its cell — GIMP will not go under about 640x716, and asked for
+    # a twelfth of a screen it simply sits across three of its neighbours. It
+    # cannot be asked in advance, so it is read afterwards, written down
+    # against the app, and the layout is done again with fewer and larger
+    # tiles. It costs one extra pass the first time an app is met and none
+    # ever after, which is the best trade available without an IPC for it.
+    after = d.state()
+    floors = learn_floors(after, asked)
+    room = fits(len(show), uw, uh, show, floors)
+    if room < len(show):
+        say("focus · %d of %d — the rest will not shrink that far" % (room, len(show)))
+        show, rest = wins[:room], wins[room:]
+        recount(after)
+        lay_focus(d, after, place, show, rest)
+
     # The shade before the last of the camera holding, not after: the hold
     # is time spent saying nothing has moved, and putting the sky behind it
     # meant the tiles landed and the world went dark a beat later.
@@ -1697,6 +1793,7 @@ def lay_focus(d, st, place, show, rest):
     uw, uh = usable(st)
     items = [(w["id"], cw, ch, place.x + cx, place.y + cy)
              for w, (cx, cy, cw, ch) in zip(show, panes(len(show), uw, uh))]
+    asked = {wid: (cw, ch) for wid, cw, ch, _, _ in items}
     items += park(place, rest, uh)
     # The name plate goes with them. It is the one window a filled screen
     # cannot hide behind a tile — it sits above the district, so what shows
@@ -1709,6 +1806,7 @@ def lay_focus(d, st, place, show, rest):
     # Every tile equal, none in front: a mode has no "the rest, a touch back",
     # because the rest are the screen.
     d.opacity_many([(w["id"], 1.0) for w in show])
+    return asked
 
 
 def remode(d, st):
@@ -1749,7 +1847,7 @@ def remode(d, st):
 
     if m["mode"] == "focus":
         uw, uh = usable(st)
-        n = fits(len(wins), uw, uh)
+        n = fits(len(wins), uw, uh, wins, read_floors())
         lay_focus(d, st, place, wins[:n], wins[n:])
     else:
         # One window was showing and it may be the one that just went. The

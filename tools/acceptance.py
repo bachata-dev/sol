@@ -722,6 +722,33 @@ def test_mode_geometry(mod):
     check("no two tiles overlap, on any screen", not bad_overlap, bad_overlap[:4])
     check("fits never returns a tile under the floor", not bad_floor, bad_floor)
 
+    # A client may refuse to be as small as its cell, and a tile that refused
+    # is not a smaller tile — it is one lying across its neighbours. Twelve
+    # real applications was twenty-four overlaps before sol asked.
+    uw = 1920 - 2 * mod.FOCUS_EDGE
+    uh = 1080 - 2 * mod.CHROME - 2 * mod.FOCUS_EDGE
+    wins = [{"app_id": "gimp"}] + [{"app_id": "foot"} for _ in range(11)]
+    check("with no floors known, the screen decides",
+          mod.fits(12, uw, uh, wins, {}) == 12)
+    roomy = mod.fits(12, uw, uh, wins, {"gimp": (644, 716)})
+    cells = mod.panes(roomy, uw, uh)
+    check("a window that will not shrink gets a cell it fits in",
+          all(cells[0][2] >= 644 and cells[0][3] >= 716 for _ in (0,)),
+          "%d tiles, first cell %dx%d" % (roomy, cells[0][2], cells[0][3]))
+    check("and that means fewer tiles, not overlapping ones",
+          roomy < 12, roomy)
+    check("a floor nothing can satisfy still lays one tile",
+          mod.fits(12, uw, uh, wins, {"gimp": (9999, 9999)}) == 1)
+
+    # roomy() is the predicate underneath it, and pairs windows with cells
+    # positionally — the cells in one split are not all the same size.
+    cells = mod.panes(3, uw, uh)
+    three = [{"app_id": "a"}, {"app_id": "b"}, {"app_id": "c"}]
+    check("roomy is true when every window fits its own cell",
+          mod.roomy(cells, three, {}))
+    check("roomy is false when one window does not",
+          not mod.roomy(cells, three, {"c": (9999, 9999)}))
+
     # The block should be nearly all of the screen: what is left is the gaps,
     # and a split that wasted a fifth of a screen would still pass every
     # check above.

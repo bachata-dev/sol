@@ -197,12 +197,23 @@ that has just arrived is recorded with the geometry it opened with, which is wha
 to. So you can open and close things all the way through a focus session and still leave it with
 everything the size it was.
 
-**On a screen that cannot hold them.** Below about 460×300 a tile is visible but not workable, so
-focus holds as many as fit at a size worth having and says how many it left — twelve terminals on a
+**On a screen that cannot hold them — or a window that will not fit one.** Below about 460×300 a
+tile is visible but not workable, so focus holds as many as fit at a size worth having and says how
+many it left — twelve terminals on a
 13-inch laptop is twelve unreadable rectangles, and the honest answer is four you can work in and
 eight waiting. A 1366×768 laptop takes four, a 1600×900 takes six, and anything from 1080p up takes
 all twelve. The floor is a size rather than a fraction of the screen because a small laptop and a
 27-inch iMac disagree about how many windows fit and agree about how small is too small.
+
+The window gets a say too, and it overrules. A client declares a minimum size and driftwm clamps a
+resize to it, so a window asked for a twelfth of a screen can come back three times that and sit
+across its neighbours rather than in its cell — GIMP will not go under about 644×716, Inkscape
+704×686, and twelve real applications was twenty-four overlaps. There is no way to ask a window its
+minimum in advance, so sol finds out the only way available: it lays the screen out, reads back what
+was actually committed, writes that down against the application, and lays out again with fewer and
+larger tiles. One extra pass the first time you focus a planet holding an app it has never met, and
+none ever after. Terminals shrink to almost nothing, which is exactly why this went unnoticed until
+a screen full of real programs met it.
 
 **`mod+shift+t` — solo.** One window, in a column you can read a line in, with the sky turned nearly
 off. The natural other half of focus: focus is everything here at once, solo is this and nothing. It
@@ -433,7 +444,7 @@ On Debian or Ubuntu, take the `.deb` from the
 [latest release](https://github.com/bachata-dev/sol/releases/latest):
 
 ```sh
-sudo apt install ./sol_1.0.0_all.deb     # apt, so it pulls the dependencies
+sudo apt install ./sol_1.0.1_all.deb     # apt, so it pulls the dependencies
 sol setup                                # the config, into your home directory
 ```
 
