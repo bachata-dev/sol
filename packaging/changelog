@@ -1,0 +1,11 @@
+sol (1.0.0) unstable; urgency=medium
+
+  * First release.
+  * The solar system as a workspace model for driftwm: districts, the bar,
+    the overview, the context menu, drag-between-planets and the shader.
+  * Screen modes — focus, solo, present — plus the night and dark palettes.
+    These need a driftwm whose IPC has a Resize, and say so when it does not.
+  * Installed as a module with a stub on the path, so Python caches its
+    compiled form rather than re-parsing on every keypress.
+
+ -- sol <noreply@github.com>  Sun, 09 Aug 2026 16:00:00 +0000

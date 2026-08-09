@@ -1,0 +1,30 @@
+Package: sol
+Version: @VERSION@
+Section: x11
+Priority: optional
+Architecture: all
+Maintainer: sol <noreply@github.com>
+Depends: python3 (>= 3.8), foot, mawk | gawk | original-awk
+Recommends: python3-gi, gir1.2-gtk-3.0, libgtk-layer-shell0, waybar, fuzzel, mako, fonts-jetbrains-mono
+Homepage: https://github.com/bachata-dev/sol
+Description: your desktop is the solar system, for driftwm
+ sol turns driftwm's infinite canvas into a place you already know: the Sun at
+ the origin and eight planets in the order everyone learned as a child, each
+ sitting where it really was, on its own ellipse, with the Sun at a focus.
+ Distance from the Sun is distance from your attention — inner planets are
+ immediate, the asteroid belt divides, outer planets are background.
+ .
+ It gives an infinite plane the one thing it lacks, which is somewhere to be.
+ Windows belong to districts, a district tidies into a grid on a card in its
+ planet's colour, the bar names where you are, and the whole system is one
+ GLSL shader that costs no windows and no meaningful CPU.
+ .
+ driftwm itself is not packaged for Debian and so cannot be declared as a
+ dependency here. Install it from https://github.com/malbiruk/driftwm; `sol
+ doctor` will tell you what is missing and what it costs you. The screen
+ modes — focus, solo and present — additionally need a driftwm new enough to
+ have a Resize in its IPC, and refuse with an explanation on one that does not.
+ .
+ After installing, run `sol setup` to put the config in your home directory.
+ A package installs once for a machine and a config belongs to a person, so
+ nothing is written under /home until you ask for it.

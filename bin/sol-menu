@@ -53,11 +53,13 @@ from gi.repository import Gdk, GLib, Gtk           # noqa: E402
 # one copy of them, so it is loaded as a module — preferring the copy beside
 # this file, so a working tree tests itself rather than whatever is installed.
 #
-# Installed, the code is at /usr/local/lib/sol and `sol` on the path is a
-# stub in front of it, so that Python caches the compiled form instead of
-# re-parsing it on every keypress. This wants the code, not the doorway:
-# loading the stub gets you a module with none of sol in it.
-MODULE = "/usr/local/lib/sol/solmod.py"
+# Installed, `sol` on the path is a stub in front of the code, so that Python
+# caches the compiled form instead of re-parsing it on every keypress. This
+# wants the code, not the doorway: loading the stub gets a module with none
+# of sol in it. The two places the code can be is the division Debian has
+# always drawn — /usr for what a package manager owns, /usr/local for what
+# you put there yourself with install.sh.
+MODULES = ("/usr/lib/sol/solmod.py", "/usr/local/lib/sol/solmod.py")
 
 
 def load_sol():
@@ -72,8 +74,8 @@ def load_sol():
     test that cannot be fooled by where the file happens to sit.
     """
     tried = []
-    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol"),
-                 MODULE, shutil.which("sol")):
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol")
+    for path in (beside,) + MODULES + (shutil.which("sol"),):
         if not path or not os.path.exists(path) or path in tried:
             continue
         tried.append(path)

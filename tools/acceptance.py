@@ -19,13 +19,28 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 
-SOL = "/usr/local/bin/sol"
-HAND = "/usr/local/bin/sol-hand"
+def _which(name, *extra):
+    """Where a sol command actually is, in whichever layout is installed.
+
+    /usr under a package and /usr/local from install.sh, and the suite has to
+    drive whichever one this machine has — hardcoding /usr/local meant the
+    menu group tore itself down the first time it met a .deb.
+    """
+    for path in extra + ("/usr/bin/" + name, "/usr/local/bin/" + name):
+        if os.path.exists(path):
+            return path
+    return shutil.which(name) or "/usr/bin/" + name
+
+
+SOL = _which("sol")
+HAND = _which("sol-hand", "/usr/share/sol/tools/sol-hand.py")
+MENU = _which("sol-menu")
 GREEN, RED, YELLOW, DIM, OFF = (
     "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m")
 
@@ -62,7 +77,8 @@ def state():
     return json.loads(out)["Ok"]["State"]
 
 
-MODULE = "/usr/local/lib/sol/solmod.py"
+MODULES = ("/usr/lib/sol/solmod.py", "/usr/local/lib/sol/solmod.py")
+MODULE = next((m for m in MODULES if os.path.exists(m)), MODULES[-1])
 
 
 def load_sol():
@@ -375,7 +391,7 @@ def menu_sandbox():
         if n != 1:
             raise AssertionError("could not stub POWER[%r] (%d matches)" % (verb, n))
     open(os.path.join(box, "sol"), "w").write(src)
-    open(os.path.join(box, "sol-menu"), "w").write(open("/usr/local/bin/sol-menu").read())
+    open(os.path.join(box, "sol-menu"), "w").write(open(MENU).read())
     for f in ("sol", "sol-menu"):
         os.chmod(os.path.join(box, f), 0o755)
     open(os.path.join(box, "open.sh"), "w").write(
@@ -425,7 +441,7 @@ def test_menu_wiring(mod):
     print("\n10a. the installed menu is wired to the installed sol")
     r = run("python3", "-c",
             "import importlib.machinery as m, importlib.util as u, sys;"
-            "l = m.SourceFileLoader('probe', '/usr/local/bin/sol-menu');"
+            "l = m.SourceFileLoader('probe', %r);" % MENU +
             "spec = u.spec_from_loader('probe', l);"
             "mod = u.module_from_spec(spec);"
             "sys.argv = ['probe', '--print-rows'];"
@@ -440,7 +456,7 @@ def test_menu_wiring(mod):
     # And the doorway itself: importing it must not run a command.
     r = run("python3", "-c",
             "import importlib.machinery as m, importlib.util as u;"
-            "l = m.SourceFileLoader('stub', '/usr/local/bin/sol');"
+            "l = m.SourceFileLoader('stub', %r);" % SOL +
             "mod = u.module_from_spec(u.spec_from_loader('stub', l));"
             "l.exec_module(mod); print('IMPORTED')", timeout=25)
     out = r.stdout + r.stderr

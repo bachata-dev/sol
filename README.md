@@ -429,11 +429,37 @@ Press `mod+/` for the card, any time:
 
 ## Install
 
+On Debian or Ubuntu, take the `.deb` from the
+[latest release](https://github.com/bachata-dev/sol/releases/latest):
+
+```sh
+sudo apt install ./sol_1.0.0_all.deb     # apt, so it pulls the dependencies
+sol setup                                # the config, into your home directory
+```
+
+`sol setup` is a separate step on purpose. A package is installed once for a machine and a config
+belongs to a person — the one here has your monitor's connector name in it — so nothing is written
+under your home directory until you ask for it. It never overwrites: an existing
+`~/.config/driftwm` is moved aside with the date on it.
+
+Anywhere else, or from a checkout:
+
 ```sh
 git clone https://github.com/bachata-dev/sol
 cd sol
 ./install.sh
 ```
+
+`install.sh` does both halves at once, because the person running it is the person being
+configured. It installs to `/usr/local`, where things you put there yourself belong; the package
+installs to `/usr` and owns what it puts there. Either way `sol doctor` will tell you what is
+missing.
+
+**driftwm is not in Debian**, so the package cannot declare it as a dependency — a dependency on a
+package that does not exist makes a `.deb` uninstallable rather than informative. Install it from
+[its own repository](https://github.com/malbiruk/driftwm). Everything in sol exits cleanly without
+it and `sol doctor` says so in as many words. The screen modes additionally want a driftwm new
+enough to have a `Resize` in its IPC, and refuse with an explanation on one that does not.
 
 Then set your display in the `MACHINE-SPECIFIC` block of `~/.config/driftwm/config.toml` (connector
 name and HiDPI scale — find yours in `driftwm msg state`) and start driftwm from your display
@@ -503,6 +529,8 @@ sol map           # the overview (runs inside a terminal; sol-map toggles it)
 sol bar strip     # one line of the bar — where, holding, strip, or last
 sol shift back    # move the focused window a slot along its grid
 sol watch         # catch windows dragged between planets (runs from autostart)
+sol setup         # install the config into your home directory (after a .deb)
+sol --version     # which sol this is; `sol doctor` prints it too
 sol help          # the keybinding card
 ```
 

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Take the compiled form with us. dpkg removes what it installed and the
+# .pyc was made afterwards, so it is ours to clean up or ours to leave behind.
+set -e
+if [ "$1" = remove ] || [ "$1" = upgrade ]; then
+    rm -rf /usr/lib/sol/__pycache__
+fi
+exit 0

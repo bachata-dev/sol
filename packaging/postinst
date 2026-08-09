@@ -1,0 +1,13 @@
+#!/bin/sh
+# Byte-compile the module on the machine that will run it.
+#
+# Python caches compiled bytecode next to the source, and /usr/lib/sol is
+# root-owned — so a .pyc written at build time would be for whatever Python
+# built it, and one written on first use cannot be written at all by the user
+# running the command. Compiled here, once, by the only process that owns the
+# directory and knows which interpreter is installed.
+set -e
+if [ "$1" = configure ]; then
+    python3 -m compileall -q /usr/lib/sol >/dev/null 2>&1 || true
+fi
+exit 0

@@ -37,6 +37,7 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol sweep [from] [to]        drain a planet's stack to the archive
   sol homes                    which app lives on which planet
   sol tour                     a narrated first flight; touch anything to stop
+  sol setup [--force]          install the config into your home directory
   sol doctor                   is this machine set up right? paste me in bug reports
   sol list                     what is where
   sol here [--waybar]          where am I?
@@ -86,6 +87,19 @@ SUN = Planet(0, "Sun", 0, 0, 0, 0.0, 0.0, 502, "#f0d99a", "home base")
 PLACES = [SUN] + PLANETS
 BELT_R = 3870          # asteroid belt radius, between Mars and Jupiter
 SYSTEM_R = 6800        # outermost orbit, at aphelion
+
+# The one place the version is written down. The Debian package reads it from
+# here rather than carrying its own, because two numbers that must agree are
+# one number and a bug waiting for the release you forget to edit twice.
+VERSION = "1.0.0"
+
+# Where the code lives when it is installed, in the two layouts it can be
+# installed in: /usr under a package, /usr/local from install.sh, which is the
+# division Debian has always drawn between what a package manager owns and
+# what you put there yourself. Anything that loads sol for its functions —
+# `sol-menu` does — looks through this list rather than guessing.
+LIBDIRS = ("/usr/lib/sol", "/usr/local/lib/sol")
+SHAREDIRS = ("/usr/share/sol", "/usr/local/share/sol")
 
 WORK_ZOOM = 1.0
 ARRIVE_RADIUS = 900    # how close counts as "on" a planet
@@ -3803,6 +3817,44 @@ def cmd_menu(args):
         sys.exit("sol menu: sol-menu is not installed")
 
 
+def cmd_setup(args):
+    """Put sol's config into your home directory. The half a package cannot.
+
+    A .deb owns files under /usr and nothing under /home — it is installed
+    once for a machine and a config belongs to a person, so no packaging
+    system will write one for you and none should. `install.sh` does both
+    halves because it is run by the person it is configuring; installed from
+    a package, this is the second half, run when you are ready for it.
+
+    It never overwrites: an existing ~/.config/driftwm is moved aside with
+    the date on it, exactly as install.sh does, because the file it would
+    clobber is the one with your monitor's name in it.
+    """
+    import shutil
+    src = next((os.path.join(d, "config") for d in SHAREDIRS
+                if os.path.isdir(os.path.join(d, "config"))), None)
+    if not src:
+        sys.exit("sol setup: no config to install — looked in %s. From a git "
+                 "checkout, run ./install.sh instead."
+                 % ", ".join(os.path.join(d, "config") for d in SHAREDIRS))
+    dst = os.path.expanduser("~/.config/driftwm")
+    if os.path.exists(dst):
+        if not args or args[0] not in ("--force", "-f"):
+            sys.exit("sol setup: %s already exists. `sol setup --force` moves "
+                     "it aside and installs a fresh one." % dst)
+        keep = "%s.bak.%s" % (dst, time.strftime("%Y%m%d-%H%M%S"))
+        shutil.move(dst, keep)
+        print("  moved the old config to %s" % keep)
+    shutil.copytree(src, dst)
+    label = os.path.join(dst, "label.sh")
+    if os.path.exists(label):
+        os.chmod(label, 0o755)
+    print("  config installed to %s" % dst)
+    print("  now set your display in the MACHINE-SPECIFIC block of "
+          "%s/config.toml" % dst)
+    print("  (connector name and scale — `driftwm msg state` prints yours)")
+
+
 def cmd_doctor(args):
     """The first ten minutes on someone else's machine, made diagnosable.
 
@@ -3823,6 +3875,10 @@ def cmd_doctor(args):
         print("  %s %s" % (mark, text))
         if mark == BAD:
             sick.append(text)
+
+    # First and unconditionally, because this output is what gets pasted into
+    # a bug report and the version is the first thing anyone reading one asks.
+    row(OK, "sol %s" % VERSION)
 
     d = None
     try:
@@ -4496,13 +4552,16 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "doctor": cmd_doctor, "first-light": cmd_first_light,
         "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
         "focus": cmd_focus, "solo": cmd_solo, "present": cmd_present,
-        "mode": cmd_mode, "pick": cmd_pick,
+        "mode": cmd_mode, "pick": cmd_pick, "setup": cmd_setup,
         "night": cmd_night, "dark": cmd_dark,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("-V", "--version", "version"):
+        print("sol %s" % VERSION)
+        return
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print(HELP)
         print("  commands: " + "  ".join(sorted(CMDS)))
