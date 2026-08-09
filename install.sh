@@ -69,10 +69,15 @@ sudo python3 -m compileall -q /usr/local/lib/sol >/dev/null 2>&1 || true
 printf '%s\n' '#!/usr/bin/env python3' \
   '# The sol command. The code is /usr/local/lib/sol/solmod.py, imported' \
   '# rather than run so its compiled form is cached — see install.sh.' \
+  '#' \
+  '# The guard is not decoration. Anything that loads sol for its functions' \
+  '# rather than its command — sol-menu does — would otherwise find this file' \
+  '# on the path, import it, and run a command nobody asked for.' \
   'import sys' \
   'sys.path.insert(0, "/usr/local/lib/sol")' \
   'import solmod' \
-  'solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
+  'if __name__ == "__main__":' \
+  '    solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
 sudo chmod 755 /usr/local/bin/sol
 sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
                    bin/sol-session bin/driftwm-up /usr/local/bin/

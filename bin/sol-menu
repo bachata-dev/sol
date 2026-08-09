@@ -50,17 +50,44 @@ from gi.repository import Gdk, GLib, Gtk           # noqa: E402
 
 # ── sol itself ────────────────────────────────────────────────────────────
 # The places, the districts and the census live in `sol`, and there must be
-# one copy of them. It is a script rather than a module, so it is loaded as
-# one — preferring the copy beside this file, so a working tree tests itself
-# rather than whatever is installed.
+# one copy of them, so it is loaded as a module — preferring the copy beside
+# this file, so a working tree tests itself rather than whatever is installed.
+#
+# Installed, the code is at /usr/local/lib/sol and `sol` on the path is a
+# stub in front of it, so that Python caches the compiled form instead of
+# re-parsing it on every keypress. This wants the code, not the doorway:
+# loading the stub gets you a module with none of sol in it.
+MODULE = "/usr/local/lib/sol/solmod.py"
+
+
 def load_sol():
-    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol")
-    path = here if os.path.exists(here) else (shutil.which("sol") or here)
-    loader = importlib.machinery.SourceFileLoader("sol", path)
-    spec = importlib.util.spec_from_loader("sol", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
+    """The first candidate that turns out to have sol in it.
+
+    Tried in order rather than chosen by path, because installed there are
+    two files called `sol` and one of them is a doorway: the stub lives in
+    the same directory as this script, so "the copy beside me" — the rule
+    that lets a working tree test itself — picks it, loads seven lines of
+    import, and hands back a module with no places, no districts and no
+    Drift. Asking each candidate whether it is the real thing is the only
+    test that cannot be fooled by where the file happens to sit.
+    """
+    tried = []
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol"),
+                 MODULE, shutil.which("sol")):
+        if not path or not os.path.exists(path) or path in tried:
+            continue
+        tried.append(path)
+        try:
+            loader = importlib.machinery.SourceFileLoader("sol", path)
+            spec = importlib.util.spec_from_loader("sol", loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+        except Exception:
+            continue
+        if hasattr(mod, "Drift"):
+            return mod
+    raise SystemExit("sol-menu: found no copy of sol to read the canvas with "
+                     "(looked in %s)" % ", ".join(tried or ["nowhere"]))
 
 
 sol = load_sol()

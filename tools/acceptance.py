@@ -412,6 +412,42 @@ def forget(box):
         os.remove(os.path.join(box, f))
 
 
+def test_menu_wiring(mod):
+    """The installed sol-menu can find the installed sol.
+
+    The group below builds a sandbox copy of both and drives that, which is
+    right for testing behaviour and blind to how the real pair are wired
+    together — it passed while right-click on the live desktop printed the
+    keybinding card and opened nothing, because `sol` on the path became a
+    stub in front of the module and sol-menu was still loading the stub.
+    So this asks the installed files, in place, the way the mouse does.
+    """
+    print("\n10a. the installed menu is wired to the installed sol")
+    r = run("python3", "-c",
+            "import importlib.machinery as m, importlib.util as u, sys;"
+            "l = m.SourceFileLoader('probe', '/usr/local/bin/sol-menu');"
+            "spec = u.spec_from_loader('probe', l);"
+            "mod = u.module_from_spec(spec);"
+            "sys.argv = ['probe', '--print-rows'];"
+            "l.exec_module(mod);"
+            "print('ROWS', len(mod.sol.menu_items(mod.sol.PLANETS[2], 3, True)))",
+            timeout=25)
+    out = r.stdout + r.stderr
+    check("sol-menu loads a sol that still has its places in it",
+          "ROWS" in out and "S O L" not in out,
+          out.strip()[:200] or "no output")
+
+    # And the doorway itself: importing it must not run a command.
+    r = run("python3", "-c",
+            "import importlib.machinery as m, importlib.util as u;"
+            "l = m.SourceFileLoader('stub', '/usr/local/bin/sol');"
+            "mod = u.module_from_spec(u.spec_from_loader('stub', l));"
+            "l.exec_module(mod); print('IMPORTED')", timeout=25)
+    out = r.stdout + r.stderr
+    check("importing the sol on the path runs nothing",
+          "IMPORTED" in out and "S O L" not in out, out.strip()[:200])
+
+
 def test_menu(mod):
     print("\n10. the ☉ menu (power commands stubbed — nothing is taken down)")
     if os.geteuid() != 0 and not os.path.exists(HAND):
@@ -1011,7 +1047,7 @@ def main():
         ("errors", test_error_paths), ("corrupt", test_corrupt_state_files),
         ("districts", test_districts), ("arrange", test_arrange),
         ("cards", test_cards), ("flight", test_flight),
-        ("watch", test_watch), ("menu", test_menu), ("doctor", test_doctor),
+        ("watch", test_watch), ("wiring", test_menu_wiring), ("menu", test_menu), ("doctor", test_doctor),
         ("verbs", test_new_verbs), ("homes", test_homes_routing),
         ("geometry", test_mode_geometry), ("paint", test_mode_paint),
         ("focus", test_focus_live), ("follows", test_mode_follows),
