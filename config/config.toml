@@ -9,6 +9,8 @@
 #   mod+tab   fly-to menu            mod+/  the keybinding card
 #   mod+a     tidy this planet       mod+n/p  step through its windows
 #   mod+e     the overview           (the whole system, named, on demand)
+#   mod+t     focus: this planet     mod+shift+t  solo: one window, a column
+#             tiled over the screen  mod+shift+p  present: nothing but a window
 #   drag a window to another planet and it flies itself into that grid
 #
 # THE RULE THIS FILE ENFORCES: the camera moves only when you ask it to.
@@ -142,6 +144,34 @@ animate_fps = 30
 # and move the focused window along the grid it is in
 "mod+shift+left" = "spawn sol shift back"
 "mod+shift+right" = "spawn sol shift forward"
+
+# ── modes ──
+# A mode is a temporary contract about the screen: one key in, the same key
+# out, and nothing survives the exit. They are single letters under mod
+# because they are pressed as often as `mod+a` is, and the shifted pair are
+# the two that take the screen away from everything — which is worth the
+# extra finger.
+#
+# mod+t was driftwm's toggle-pin-to-screen. Focus is the mode this whole
+# model was waiting on a resize for, "t" is what every tiling desktop has
+# meant by it for twenty years, and pinning a window to the screen is not a
+# thing sol has ever asked anyone to do — so it moves down one, rather than
+# quietly disappearing.
+"mod+t" = "spawn sol focus"
+"mod+shift+t" = "spawn sol solo"
+"mod+shift+p" = "spawn sol present"
+"mod+shift+n" = "spawn sol night"
+# ...and its opposite number: night walks the sky towards amber, dark walks it
+# towards grey with the Sun going out at the source. Each turns the other off,
+# because together they cancel into a muddy nothing.
+"mod+shift+d" = "spawn sol dark"
+"mod+ctrl+t" = "toggle-pin-to-screen"
+# In a mode the arrows move the focus one tile that way; outside one they are
+# driftwm's own `center-nearest`, which is the same idea for a canvas. Left and
+# right are already sunward/outward and keep meaning "that way" in both worlds,
+# so only up and down needed binding.
+"mod+up" = "spawn sol pick up"
+"mod+down" = "spawn sol pick down"
 
 # ── carry ──
 "mod+ctrl+1" = "spawn sol send 1"

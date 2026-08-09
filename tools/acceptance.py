@@ -62,9 +62,19 @@ def state():
     return json.loads(out)["Ok"]["State"]
 
 
+MODULE = "/usr/local/lib/sol/solmod.py"
+
+
 def load_sol():
-    """The installed sol, as a module, for the parts worth testing directly."""
-    loader = importlib.machinery.SourceFileLoader("sol_mod", SOL)
+    """The installed sol, as a module, for the parts worth testing directly.
+
+    `sol` on the path is a stub in front of this, so that Python caches the
+    compiled form instead of re-parsing 190KB on every keypress. The tests
+    want the code, not the doorway — but they fall back to the doorway, so
+    that a tree installed the old way still runs them.
+    """
+    where = MODULE if os.path.exists(MODULE) else SOL
+    loader = importlib.machinery.SourceFileLoader("sol_mod", where)
     spec = importlib.util.spec_from_loader("sol_mod", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
@@ -97,12 +107,21 @@ def windows_of(st, place_n, mod):
 # ── 1. the commands answer at all ─────────────────────────────────────────
 def test_command_surface(mod):
     print("\n1. every command answers")
+    # `next` and `prev` refuse when the planet you are standing on is holding
+    # nothing, which is correct and is not what this group is asking about.
+    # So it stands somewhere with a window in it first, and the exit code
+    # stays a claim about the command rather than about the canvas.
+    sol("goto", "3")
+    time.sleep(1.5)
+    stock(3, 1, mod)
     for args in (["here"], ["here", "--waybar"], ["list"], ["system"],
                  ["goto", "3"], ["goto", "earth"], ["goto", "home"],
                  ["hop", "out"], ["hop", "in"], ["arrange"], ["gather"],
                  ["sweep"], ["plate", "3"], ["bar", "where"],
                  ["bar", "holding"], ["bar", "strip"], ["bar", "last"],
-                 ["next"], ["prev"], ["help"], ["doctor"]):
+                 ["next"], ["prev"], ["help"], ["doctor"],
+                 ["mode"], ["mode", "off"],
+                 ["night", "off"], ["dark", "off"], ["pick", "right"]):
         r = sol(*args)
         check("sol %s exits 0" % " ".join(args), r.returncode == 0,
               (r.stderr or r.stdout)[:200])
@@ -345,7 +364,11 @@ def menu_sandbox():
     """A copy of sol whose power commands only touch a file."""
     import re
     box = tempfile.mkdtemp(prefix="sol-menu-test-")
-    src = open(SOL).read()
+    # The code, not the stub in front of it: `sol` on the path imports the
+    # module so Python can cache its bytecode, and the POWER table being
+    # rewritten here lives in the module. The copy keeps its shebang and its
+    # __main__ guard, so it still runs directly as this sandbox needs.
+    src = open(MODULE if os.path.exists(MODULE) else SOL).read()
     for verb in ("lock", "sleep", "restart", "shutdown", "logout"):
         src, n = re.subn(r'"%s":\s*\[[^\]]*\]' % verb,
                          '"%s": ["touch", "%s/%s"]' % (verb, box, verb), src)
@@ -604,6 +627,382 @@ def test_homes_routing(mod):
         time.sleep(1.5)
 
 
+# ── 14. the modes: geometry, before the canvas is involved ────────────────
+def test_mode_geometry(mod):
+    """The arithmetic a mode is made of, checked without a compositor.
+
+    Everything here is a pure function of a screen size and a window count,
+    and every one of them has a failure that is invisible on the machine it
+    was written on: a split that overlaps only at seven windows, a column
+    that is a maximise only on a laptop, a neighbour that wraps only in the
+    bottom row. So they are checked across the screens sol will actually meet
+    rather than against the one it is being run on.
+    """
+    print("\n14. what a mode computes")
+    screens = [(1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)]
+    bad_fill, bad_bounds, bad_overlap, bad_floor = [], [], [], []
+    for sw, sh in screens:
+        uw = sw - 2 * mod.FOCUS_EDGE
+        uh = sh - 2 * mod.CHROME - 2 * mod.FOCUS_EDGE
+        for n in range(1, 13):
+            cells = mod.panes(n, uw, uh)
+            if len(cells) != n:
+                bad_fill.append((sw, n, len(cells)))
+                continue
+            for cx, cy, cw, ch in cells:
+                if (cx - cw / 2 < -uw / 2 - 1 or cx + cw / 2 > uw / 2 + 1
+                        or cy - ch / 2 < -uh / 2 - 1 or cy + ch / 2 > uh / 2 + 1):
+                    bad_bounds.append((sw, sh, n))
+            for i in range(len(cells)):
+                for j in range(i + 1, len(cells)):
+                    ax, ay, aw, ah = cells[i]
+                    bx, by, bw, bh = cells[j]
+                    if (abs(ax - bx) * 2 < aw + bw - 1
+                            and abs(ay - by) * 2 < ah + bh - 1):
+                        bad_overlap.append((sw, sh, n, i, j))
+        room = mod.fits(12, uw, uh)
+        smallest = min((cw, ch) for _, _, cw, ch in mod.panes(room, uw, uh))
+        if room > 1 and (smallest[0] < mod.MIN_TILE[0]
+                         or smallest[1] < mod.MIN_TILE[1]):
+            bad_floor.append((sw, sh, room, smallest))
+    check("panes hands back exactly the tiles asked for", not bad_fill, bad_fill)
+    check("no tile leaves the usable area", not bad_bounds, bad_bounds[:4])
+    check("no two tiles overlap, on any screen", not bad_overlap, bad_overlap[:4])
+    check("fits never returns a tile under the floor", not bad_floor, bad_floor)
+
+    # The block should be nearly all of the screen: what is left is the gaps,
+    # and a split that wasted a fifth of a screen would still pass every
+    # check above.
+    uw, uh = 1920 - 2 * mod.FOCUS_EDGE, 1080 - 2 * mod.CHROME - 2 * mod.FOCUS_EDGE
+    thin = [(n, round(sum(cw * ch for _, _, cw, ch in mod.panes(n, uw, uh))
+                      / (uw * uh), 3)) for n in range(1, 13)]
+    check("every split covers at least 94% of the block",
+          all(f >= 0.94 for _, f in thin), thin)
+
+    # Two windows side by side rather than stacked: the tie in the shape test
+    # has to break towards columns, because text is taller than it is wide.
+    two = mod.panes(2, uw, uh)
+    check("two windows land side by side", two[0][1] == two[1][1], two)
+
+    # A reading column stays a column on a small screen.
+    wide = [(sw, round(min(mod.READ_COL, (sw - 2 * mod.FOCUS_EDGE) * mod.READ_MOST)
+                       / (sw - 2 * mod.FOCUS_EDGE), 2)) for sw, _ in screens]
+    check("solo is never more than READ_MOST of the screen",
+          all(f <= mod.READ_MOST + 0.01 for _, f in wide), wide)
+
+    # Directional picking across a 2x2: every arrow lands on the right tile,
+    # and an edge stays put rather than wrapping to the far side.
+    cells = mod.panes(4, uw, uh)
+    grid = [{"id": i, "position": (cx, cy)} for i, (cx, cy, _, _) in enumerate(cells)]
+    want = {(0, "right"): 1, (0, "down"): 2, (0, "left"): 0, (0, "up"): 0,
+            (1, "left"): 0, (1, "down"): 3, (1, "right"): 1,
+            (3, "up"): 1, (3, "left"): 2, (3, "down"): 3}
+    wrong = [(i, way, mod.neighbour(grid[i], grid, way)["id"], expect)
+             for (i, way), expect in want.items()
+             if mod.neighbour(grid[i], grid, way)["id"] != expect]
+    check("the arrows move one tile, and stop at the edge", not wrong, wrong)
+
+
+# ── 15. the shader block and the corner survive being written ─────────────
+def test_mode_paint(mod):
+    print("\n15. the palette is written and read back")
+    src = open(mod.SHADER).read()
+    check("the shader has its mode markers",
+          mod.MODE_HEAD in src and mod.MODE_TAIL in src)
+
+    was_shade, was_night, was_dark = mod.read_paint()
+    d = mod.Drift()
+    try:
+        mod.paint(d, night=0.25)
+        _, n, k = mod.read_paint()
+        check("night is written and read back", abs(n - 0.25) < 1e-6, n)
+        mod.paint(d, shade=(0.1, 0.2, 0.3, 0.9))
+        s, n, k = mod.read_paint()
+        check("a mode's shade does not disturb the evening",
+              abs(n - 0.25) < 1e-6 and abs(s[3] - 0.9) < 1e-6, (s, n))
+        mod.paint(d, shade=(0.0, 0.0, 0.0, 0.0))
+        _, n, _ = mod.read_paint()
+        check("leaving a mode does not turn the evening off",
+              abs(n - 0.25) < 1e-6, n)
+    finally:
+        mod.paint(d, shade=was_shade, night=was_night, dark=was_dark)
+
+    # night and dark are two answers to one question: each turns the other off
+    r = sol("night", "on")
+    _, n, k = mod.read_paint()
+    check("night on clears dark", r.returncode == 0 and n > 0 and k == 0, (n, k))
+    sol("dark", "on")
+    _, n, k = mod.read_paint()
+    check("dark on clears night", k > 0 and n == 0, (n, k))
+    sol("dark", "off")
+    _, n, k = mod.read_paint()
+    check("dark off leaves both at rest", n == 0 and k == 0, (n, k))
+
+    # The corner radius is somebody else's config file: only the
+    # [decorations] key may move, and it must round-trip exactly.
+    before = open(mod.CONFIG).read()
+    rest = mod.read_corner()
+    check("the resting corner radius is readable", isinstance(rest, int), rest)
+    mod.write_corner(mod.MODE_CORNER)
+    others = [ln for ln in open(mod.CONFIG).read().splitlines()
+              if ln.startswith("corner_radius")]
+    check("only one corner_radius line moved",
+          others.count("corner_radius = %d" % mod.MODE_CORNER) == 1, others)
+    mod.write_corner(rest)
+    check("the config round-trips byte for byte",
+          open(mod.CONFIG).read() == before)
+    check("writing the same value again changes nothing",
+          mod.write_corner(rest) is False)
+
+
+# ── 16. focus, on the real canvas ─────────────────────────────────────────
+def mode_tiles(mod, st=None):
+    """The windows a mode has put on the screen, as screen-space rects."""
+    st = state() if st is None else st
+    out = mod.active_output(st)
+    cx, cy = out["camera"]
+    sw, sh = out["size"]
+    rects = []
+    for w in st.get("windows", []):
+        if mod.is_furniture(w):
+            continue
+        x, y = w["position"]
+        ww, wh = w["size"]
+        l, r = x - ww / 2.0 - cx + sw / 2.0, x + ww / 2.0 - cx + sw / 2.0
+        t, b = -(y + wh / 2.0) + cy + sh / 2.0, -(y - wh / 2.0) + cy + sh / 2.0
+        if r > 0 and l < sw and b > 0 and t < sh:
+            rects.append((w["id"], l, t, r, b))
+    return rects, sw, sh
+
+
+def test_focus_live(mod):
+    print("\n16. focus fills the screen, and gives it back")
+    sol("mode", "off")
+    time.sleep(1.0)
+    reset_canvas()
+    time.sleep(1.2)
+    sol("goto", "3")
+    time.sleep(1.8)
+    have = stock(3, 4, mod)
+    sol("arrange", "3")
+    time.sleep(2.0)
+
+    st = state()
+    before = {w["id"]: (tuple(w["position"]), tuple(w["size"]))
+              for w in mod.assignment(st).get(3, [])}
+    rest_corner = mod.read_corner()
+    check("Earth is holding something to focus", len(before) >= 4, have)
+
+    r = sol("focus")
+    check("sol focus exits 0", r.returncode == 0, (r.stderr or r.stdout)[:200])
+    time.sleep(3.0)
+
+    check("the bar says which mode it is in", "focus" in sol("mode").stdout)
+    check("the corner comes down while a mode is on",
+          mod.read_corner() == mod.MODE_CORNER, mod.read_corner())
+    _, _, shade_a = (lambda p: (p[1], p[2], p[0][3]))(mod.read_paint())
+    check("the sky is shaded", shade_a > 0.5, shade_a)
+
+    rects, sw, sh = mode_tiles(mod)
+    check("every window on Earth is a tile", len(rects) >= 4, len(rects))
+    off = [t for t in rects
+           if t[1] < -1 or t[2] < mod.CHROME - 1
+           or t[3] > sw + 1 or t[4] > sh - mod.CHROME + 1]
+    check("no tile lands under the bar or off the screen", not off, off[:3])
+    over = []
+    for i in range(len(rects)):
+        for j in range(i + 1, len(rects)):
+            _, al, at, ar, ab = rects[i]
+            _, bl, bt, br, bb = rects[j]
+            if al < br - 1 and bl < ar - 1 and at < bb - 1 and bt < ab - 1:
+                over.append((rects[i][0], rects[j][0]))
+    check("no two tiles overlap on screen", not over, over)
+    covered = sum((r - l) * (b - t) for _, l, t, r, b in rects)
+    usable_area = sw * (sh - 2 * mod.CHROME)
+    check("the tiles cover most of the usable screen",
+          covered / usable_area >= 0.92, round(covered / usable_area, 3))
+
+    # The camera is on the planet, not wherever a resize dragged it.
+    check("the camera is parked on the planet",
+          near(camera(mod), (mod.PLANETS[2].x, mod.PLANETS[2].y), slack=6.0),
+          camera(mod))
+
+    # ...and the arrows move focus without moving the camera.
+    was = camera(mod)
+    sol("pick", "right")
+    time.sleep(0.8)
+    check("picking a tile does not move the camera", near(camera(mod), was, 6.0))
+
+    r = sol("mode", "off")
+    check("sol mode off exits 0", r.returncode == 0, r.stderr[:150])
+    time.sleep(3.5)
+    st = state()
+    after = {w["id"]: (tuple(w["position"]), tuple(w["size"]))
+             for w in mod.real_windows(st)}
+    wrong = [(wid, before[wid], after.get(wid))
+             for wid in before
+             if wid in after and after[wid][1] != before[wid][1]]
+    check("every window is handed back the size it had", not wrong, wrong[:3])
+    drifted = [(wid, before[wid][0], after[wid][0]) for wid in before
+               if wid in after
+               and (abs(after[wid][0][0] - before[wid][0][0]) > 3
+                    or abs(after[wid][0][1] - before[wid][0][1]) > 3)]
+    check("and the place it had", not drifted, drifted[:3])
+    check("the corner radius comes back", mod.read_corner() == rest_corner,
+          mod.read_corner())
+    check("the shade is cleared", mod.read_paint()[0][3] == 0.0,
+          mod.read_paint()[0])
+
+
+# ── 17. a mode keeps up with the district under it ────────────────────────
+def watcher_alive():
+    """Is `sol watch` up? Re-laying a mode is its job, like catching drags."""
+    out = run("ps", "-eo", "pid,cmd").stdout
+    return any("sol watch" in ln and "grep" not in ln for ln in out.splitlines())
+
+
+def ensure_watcher():
+    """Start the watcher if nothing is watching.
+
+    The homes group deliberately kills it and runs its own, and leaves the
+    machine without one — which is fine for the groups that only drive the
+    CLI and fatal for the ones about a mode following its district. Started
+    rather than asserted, because a suite that fails for want of a daemon it
+    could have started is a suite that teaches you nothing.
+    """
+    if watcher_alive():
+        return
+    subprocess.Popen([SOL, "watch"], stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+    time.sleep(2.5)
+
+
+def stock(place_n, want, mod, tries=6):
+    """Get `want` windows into a district, and be sure of it before going on.
+
+    Spawning four and sleeping is a coin toss once the machine is busy: a
+    window is announced before it has a size, `gather` only claims what has
+    arrived, and a group that starts a window short fails on a check about
+    geometry. So this asks the canvas rather than the clock.
+    """
+    for _ in range(tries):
+        have = len(mod.assignment(state()).get(place_n, []))
+        if have >= want:
+            return have
+        sol("goto", str(place_n))
+        time.sleep(1.2)
+        spawn(min(want - have, 3), settle=1.5)
+        sol("gather", str(place_n))
+        time.sleep(1.8)
+    return len(mod.assignment(state()).get(place_n, []))
+
+
+def reset_canvas():
+    """Close every terminal the groups before this one left lying about.
+
+    The mode groups measure a whole screen, so they cannot inherit forty
+    windows from their predecessors: a district that deep tiles twelve and
+    parks the remainder, and a window parked off-screen on purpose is
+    indistinguishable from a layout that went wrong. Worse, forty overlapping
+    windows around one planet give the compositor a collision to resolve on
+    every resize, and it resolves them by moving the camera — which is a real
+    fault to have found, and not the one these groups are looking for.
+    """
+    for w in state().get("windows", []):
+        if w.get("app_id") == "foot":
+            msg("close", "--id", str(w["id"]))
+            time.sleep(0.06)
+    # Wait for them to actually be gone. A client is closed when it says so,
+    # not when it was asked, and a group that starts counting windows while
+    # the last four are still dying counts four windows too many.
+    for _ in range(20):
+        if not any(w.get("app_id") == "foot" for w in state().get("windows", [])):
+            break
+        time.sleep(0.3)
+
+
+def test_mode_follows(mod):
+    print("\n17. closing a tile closes the gap")
+    # Said first and plainly: a mode follows its district from inside the
+    # watcher, so a watcher that is not running turns every check below into
+    # a puzzle about geometry when the answer is that nobody was listening.
+    ensure_watcher()
+    if not check("the watcher is running to notice", watcher_alive(),
+                 "re-laying a mode is its job, and it would not start"):
+        return
+    reset_canvas()
+    sol("mode", "off")
+    time.sleep(1.2)
+    sol("goto", "3")
+    time.sleep(1.8)
+    stock(3, 3, mod)
+    sol("arrange", "3")
+    time.sleep(2.0)
+    sol("focus")
+    time.sleep(3.0)
+
+    rects, sw, sh = mode_tiles(mod)
+    was = len(rects)
+    check("focus is holding several tiles", was >= 3, was)
+    doomed = rects[0][0]
+    msg("close", "--id", str(doomed))
+    time.sleep(4.5)                   # the watcher has to notice and re-lay
+
+    rects, sw, sh = mode_tiles(mod)
+    check("the closed tile is gone", all(t[0] != doomed for t in rects),
+          [t[0] for t in rects])
+    check("one fewer tile is on the screen", len(rects) == was - 1, len(rects))
+    covered = sum((r - l) * (b - t) for _, l, t, r, b in rects)
+    usable_area = sw * (sh - 2 * mod.CHROME)
+    check("the survivors close the gap",
+          covered / usable_area >= 0.92, round(covered / usable_area, 3))
+
+    ids = {t[0] for t in rects}
+    before_open = len(rects)
+    spawn(1)
+    time.sleep(5.0)
+    rects, _, _ = mode_tiles(mod)
+    check("a window opening lands on the tiling",
+          len(rects) == before_open + 1 and {t[0] for t in rects} > ids,
+          [t[0] for t in rects])
+    sol("mode", "off")
+    time.sleep(3.0)
+
+
+# ── 18. one mode at a time, and it belongs to its planet ──────────────────
+def test_mode_exclusive(mod):
+    print("\n18. one mode at a time")
+    sol("mode", "off")
+    time.sleep(1.0)
+    reset_canvas()
+    time.sleep(1.2)
+    sol("goto", "3")
+    time.sleep(1.8)
+    stock(3, 2, mod)
+    sol("focus")
+    time.sleep(3.0)
+    check("focus is on", "focus" in sol("mode").stdout)
+    sol("solo")
+    time.sleep(3.0)
+    out = sol("mode").stdout
+    check("entering solo left focus", "solo" in out and "focus" not in out, out)
+
+    # A mode belongs to the place it was entered on.
+    sol("goto", "8")
+    time.sleep(3.0)
+    check("flying to another planet ends the mode",
+          "no mode" in sol("mode").stdout, sol("mode").stdout)
+    check("the corner radius came back with it",
+          mod.read_corner() != mod.MODE_CORNER, mod.read_corner())
+
+    # And a mode refuses where it cannot mean anything.
+    sol("system")
+    time.sleep(2.2)
+    r = sol("focus")
+    check("focus refuses from the whole-system view", r.returncode != 0,
+          (r.stdout + r.stderr)[:160])
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -614,6 +1013,9 @@ def main():
         ("cards", test_cards), ("flight", test_flight),
         ("watch", test_watch), ("menu", test_menu), ("doctor", test_doctor),
         ("verbs", test_new_verbs), ("homes", test_homes_routing),
+        ("geometry", test_mode_geometry), ("paint", test_mode_paint),
+        ("focus", test_focus_live), ("follows", test_mode_follows),
+        ("exclusive", test_mode_exclusive),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))

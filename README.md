@@ -72,6 +72,9 @@ Press **`mod+/`** at any time for this card on screen.
 | `mod+tab` | fly-to menu | **Do** | |
 | `mod+;` | the command line | `mod+return` `mod+space` | terminal · launcher |
 | drag a window | to another planet | `mod+q` `mod+f` `mod+m` | close · fullscreen · maximise |
+| **Modes** | | `mod+t` | **focus** — this planet, tiled over the screen |
+| `mod+shift+t` | **solo** — one window, a column wide | `mod+shift+p` | **present** — nothing of sol showing |
+| `mod+shift+n` | **night** — the evening palette | `mod+shift+d` | **dark** — the Sun turned down |
 
 Drag to pan, scroll to pan, pinch to zoom — and when you're zoomed out past 45%, clicking any window
 flies you to it.
@@ -140,6 +143,129 @@ would defect to Mercury.
 
 ![a planet with a full district](screenshots/district.png)
 
+## Modes
+
+Everything above is about a canvas you look at. A **mode** is the other thing a desktop is sometimes
+asked to be: a screen you work inside. sol has one standing rule — the camera moves only when you
+ask it to — and a mode does not get to break it. **Entering one is the asking**, one key in and the
+same key out, and nothing survives the exit.
+
+That last part is the whole design. A mode writes down every window's position *and size* before it
+touches anything, so leaving is a restore rather than a reconstruction. `sol arrange` could always
+put a district back by recomputing its grid; nothing can recompute the size a window happened to
+have when you pressed the key. The bar names the mode you are in beside the place you are on,
+because a mode you cannot see you are in is a fault rather than a feature.
+
+Only one is ever on, and flying to another planet ends it — a mode belongs to the place it was
+entered on.
+
+**`mod+t` — focus.** This planet's windows, resized to tile the whole screen, and the world behind
+them gone to a shade of its own colour. Rows rather than a fixed grid, because a grid leaves holes:
+three windows in a 2×2 is a quarter of the screen showing nothing. The rows are filled evenly and a
+short row shares the full width, so every pixel belongs to somebody — which is the point of a mode
+that fills the screen. How many rows is settled by the same test `mod+a` applies to a district: the
+split whose cells come closest in shape to the screen they are on. Two windows land side by side,
+three land two over one, four land square. `sol focus 2` tiles only the two most recent and the rest
+wait a screen below, still open and still one `mod+n` away.
+
+What is left of the planet is its colour, washed over the sky and showing through the gaps between
+the tiles — enough to know which world you are standing on without any of it competing with the
+work. The gaps are 8 pixels and so is the margin, so the block reads as even; and the windows lose
+most of their corner radius for the duration, because the 24 they wear on the canvas exists to make
+them read as nested inside their district's card, and a mode has no card to be concentric with. At
+24 the corner stops being a corner and becomes a bite showing the shade through. It goes to 8 and
+comes back to whatever you had it set to on the way out.
+
+**Moving between tiles.** The arrows mean what they look like they mean: `mod+left` and `mod+right`
+already mean sunward and outward on the canvas, and on a filled screen they keep meaning "that way"
+— one tile, not one orbit. `mod+up` and `mod+down` join them. Nothing flies: everything is already
+in front of you, and travelling to something already on screen is motion for nothing. `mod+n` and
+`mod+p` still step in the order the grid reads, which is what you want when you are going through
+all of them rather than reaching for one. Outside a mode the same arrows are driftwm's own
+`center-nearest`, which is the same idea for a canvas.
+
+**Closing one closes the gap.** A tiling that keeps a hole where a window used to be is not a
+tiling, so the district changing under a mode re-draws it: close one of four and the remaining three
+re-split into two over one and fill the screen again. It works the other way too — a window opening
+while focus is on lands *on* the tiling rather than being filed onto the canvas behind it, which is
+where `mod+a`'s grid would have put it and is somewhere you cannot see. A mode whose last window
+closes has nothing left to be a mode about, and ends.
+
+The record is amended rather than rebuilt each time. A window that was already there keeps the size
+and the place it will be handed back — that is the one thing nothing can recompute — and a window
+that has just arrived is recorded with the geometry it opened with, which is what it should return
+to. So you can open and close things all the way through a focus session and still leave it with
+everything the size it was.
+
+**On a screen that cannot hold them.** Below about 460×300 a tile is visible but not workable, so
+focus holds as many as fit at a size worth having and says how many it left — twelve terminals on a
+13-inch laptop is twelve unreadable rectangles, and the honest answer is four you can work in and
+eight waiting. A 1366×768 laptop takes four, a 1600×900 takes six, and anything from 1080p up takes
+all twelve. The floor is a size rather than a fraction of the screen because a small laptop and a
+27-inch iMac disagree about how many windows fit and agree about how small is too small.
+
+**`mod+shift+t` — solo.** One window, in a column you can read a line in, with the sky turned nearly
+off. The natural other half of focus: focus is everything here at once, solo is this and nothing. It
+is a column rather than a maximise because maximising a text window on a 27-inch screen gives you a
+200-character line, which nobody has ever wanted — the width that helps is the one a page has always
+had. That width is an absolute measure, not a fraction: 1180 pixels is about a hundred characters
+whatever it is sitting on. But it is also capped at 82% of the screen, because on a 1366-wide laptop
+the absolute number stops being a column and becomes the whole screen with a margin — a maximise
+wearing solo's name.
+
+**`mod+shift+p` — present.** What to press before you share your screen. The bar and the footer go,
+the name plates go with them, notifications are held, and the sky goes black — so what lands in the
+capture is your window on a dark background, which is what everyone else's desktop looks like and
+exactly what a projector should get. `mod+n` turns the deck: a district is a slide sequence once it
+is one window at a time on a black screen.
+
+**`mod+shift+n` — night, and `mod+shift+d` — dark.** The two palettes, and they answer opposite
+questions.
+
+Night asks what the sky should look like at eleven at night. It is not a dimmer — a dimmer just
+makes a cold picture darker. The blue end comes down hardest and what is left is walked towards
+amber, which is what an evening actually does to a room. `sol night auto` takes it from the clock.
+
+Dark asks what it should look like when you want nothing on it competing for you at all. **The Sun
+is turned down at the source** rather than in the finished picture: dimming the render would grey
+the Sun along with everything else and leave it the brightest grey on the canvas, whereas taking the
+light out of the star itself lets the corona go first, then the limb, then the core — the system
+going cold from the outside in. The rest of the sky follows it towards its own grey. What survives
+longest is the difference between one planet's colour and the next, which is the one thing here you
+navigate by; and the name plates keep their colour throughout, because they are windows rather than
+sky, so a dark system is still a readable one.
+
+Dark is not focus wearing another name. Focus takes the canvas away and gives you the screen; dark
+leaves the canvas exactly where it is and turns the lights off in it — sitting at the Sun with dark
+on is still the whole solar system, still navigable, just cold.
+
+Turning one on turns the other off. They are two answers to the same question and mixing them gives
+neither: one walks the picture towards amber, the other towards grey, and together they cancel into
+a muddy nothing.
+
+Both take `on`, `off`, or a number, and both are written into the shader itself — the same file the
+canvas is drawn from — so they survive a reboot without sol owning a settings file to keep them in.
+Both are read back before any mode writes its shade, so entering focus at midnight does not turn the
+evening off.
+
+**What made this possible.** driftwm's IPC gained `Resize`, and it is the whole reason this chapter
+exists. Until it did, a district could be *arranged* but never *fitted* — the stack at twelve exists
+precisely because windows could not be made smaller. Sizes here are the window's visual frame, the
+same thing `state` reports, so a layout computed from what sol can see tiles exactly whether the
+windows are server-decorated, client-decorated or bare.
+
+Two things had to be learned the hard way and are worth writing down. A window is **moved before it
+is sized**, because a district that has been through `mod+a` is a snap cluster, and a window that
+grows into the neighbour it is snapped to gets relocated *beside* the cluster rather than left where
+it was put — with the camera panned after it. Moving first means every window is already standing in
+its own cell with a gap around it, so nothing ever grows into anything. And the layout is marked as
+sol's own work for as long as it takes driftwm's geometry animation to finish arriving, or the
+watcher that catches windows you drag between planets sees four windows move at once and files every
+one of them back into the grid it was just lifted out of.
+
+On a driftwm without `Resize`, the modes say so and refuse; everything else works exactly as it did.
+`sol doctor` reports it in as many words.
+
 ## Carrying one there by hand
 
 **Drag a window onto another planet and let go.** driftwm has always let you move a window anywhere
@@ -163,8 +289,9 @@ worth watching for that reason alone.
 ## When a planet fills right up
 
 A grid can only grow so far before framing it puts the windows below the size at which they are any
-use — and driftwm's IPC has no resize, so shrinking them to fit is not on the table. What is left is
-to stop laying all of them out.
+use. Shrinking them to fit is not the answer even now that driftwm can resize: a window on the
+canvas is the size you gave it, and a grid that quietly halved everything to make room would be sol
+deciding how big your editor is. What is left is to stop laying all of them out.
 
 So the grid holds the **twelve most recently used** and the rest collapse into a **stack** at its
 corner: offset, dimmed, each one a step further back than the last. They are still there, still
@@ -326,6 +453,14 @@ desktop still autologging in on another VT — is a desktop whose `☉` menu qui
 you click **Restart**. `sol doctor` says so in as many words. If the compositor fails to start,
 `sol-session` drops you back to the console prompt with the tail of its log rather than looping.
 
+`sol` installs as a module at `/usr/local/lib/sol` with a seven-line stub on the path, rather than
+as one big script. Python caches compiled bytecode for what it imports and never for a script it was
+handed, so a script run directly re-parses all 190KB on every keypress: 55ms, of which 43ms is the
+parser and 11ms is the interpreter existing at all. Imported once and compiled at install time, the
+same command answers in 24ms. Nothing about sol runs on a timer, so this was never a load question —
+it is the difference between a keybinding that feels instant and one that nearly does, paid again on
+every press, every menu item and every click in the bar.
+
 **Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
 `python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu — without them right-click has
 nothing to open and everything else works; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
@@ -342,6 +477,12 @@ sol goto 4        # or: sol goto mars, sol goto ops, sol goto sun
 sol hop out       # next planet outward; `sol hop in` goes sunward
 sol system        # frame the whole solar system
 sol arrange       # tidy this planet's windows; `sol arrange all` does every one
+sol focus         # fill the screen with this planet's windows; `sol focus 2` takes two
+sol solo          # one window, a column wide, the sky nearly off
+sol present       # one window, no chrome, nothing of sol showing
+sol mode          # which mode is on; `sol mode off` leaves it
+sol night         # dim the sky the way an evening does; on, off, auto, or a number
+sol dark          # turn the Sun down; the colour goes out of the system with it
 sol next          # step to the next window here; `sol prev` goes back
 sol send 8        # send the focused window to Neptune; `--stay` to not follow
 sol back          # the camera to where it was before the last flight (it toggles)

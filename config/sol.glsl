@@ -91,6 +91,19 @@ const vec4 D7 = vec4(0.0, 0.0, 0.0, 0.0);
 const vec4 D8 = vec4(0.0, 0.0, 0.0, 0.0);
 // ── end districts ──
 
+// Written by the mode commands, the same way and for the same reason: there
+// is no uniform sol can set, but a shader reloads without disturbing the
+// camera, the windows or the focus. SHADE is the wash a mode lays over the
+// sky — rgb, then how much of it. NIGHT is how far into the evening the
+// palette has gone, and DARK is how far the Sun has been turned down. All
+// three are read back before any of them is written, so leaving focus does
+// not turn off the evening. Only these lines are generated.
+// ── modes ──
+const vec4 SHADE = vec4(0.0000, 0.0000, 0.0000, 0.0000);
+const float NIGHT = 0.0000;
+const float DARK = 0.0000;
+// ── end modes ──
+
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 
 float noise(vec2 p) {
@@ -324,6 +337,13 @@ void main() {
     // colour walks from a near-white core out to amber at the limb and
     // darkens as it goes, over a slow granulation that keeps it from
     // looking painted.
+    //
+    // DARK turns it down at the source. Dimming the finished picture would
+    // grey the Sun along with everything else and leave it the brightest grey
+    // on the canvas; taking it out of the star itself lets the corona go
+    // first, then the limb, then the core — the system going cold from the
+    // outside in, which is the thing being asked for.
+    float sunlight = 1.0 - 0.88 * DARK;
     if (r < 2600.0) {
         float ang = atan(c.y, c.x);
         float flick = 0.88 + 0.12 * noise(vec2(ang * 3.0, u_time * 0.35));
@@ -332,8 +352,8 @@ void main() {
         // faint one that reaches out towards Mercury. Between them they come
         // to about what the single falloff they replaced did — the point of
         // the second is the shape of the fade, not more light.
-        col += SUN_GLOW * exp(-r * 0.0040) * flick * (0.09 + uf * 0.17);
-        col += SUN_GLOW * exp(-r * 0.0011) * flick * (0.03 + uf * 0.06);
+        col += SUN_GLOW * exp(-r * 0.0040) * flick * (0.09 + uf * 0.17) * sunlight;
+        col += SUN_GLOW * exp(-r * 0.0011) * flick * (0.03 + uf * 0.06) * sunlight;
 
         // The disc keeps exactly the brightness it always had. What changed
         // is where that brightness goes: concentrated in the core and falling
@@ -346,7 +366,7 @@ void main() {
         float gran = 0.94 + 0.06 * noise(c * 0.014 + u_time * 0.02);
         col += mix(SUN_LIMB, SUN_CORE, limb) * limb * gran
              * (1.0 - smoothstep(SUN_R * 0.98, SUN_R * 1.015, r))
-             * (0.12 + uf * 0.66);
+             * (0.12 + uf * 0.66) * sunlight;
     }
 
     // Planets, each with the face its own kind of world has: banding for the
@@ -405,6 +425,35 @@ void main() {
     col += halo(c, P6, C6, uf, 0.12);
     col += halo(c, P7, C7, uf, 0.12);
     col += halo(c, P8, C8, uf, 0.12);
+
+    // Night: the palette after dark. Not a dimmer — a dimmer just makes a
+    // cold picture darker. The blue end comes down hardest and what is left
+    // is walked towards amber, which is what an evening actually does to a
+    // room, and it lands where a screen you can still read at midnight is.
+    if (NIGHT > 0.0) {
+        float lum = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 warm = mix(vec3(lum), col, 0.65) * vec3(1.06, 0.88, 0.66);
+        col = mix(col, warm * (1.0 - 0.45 * NIGHT), NIGHT);
+    }
+
+    // A mode's shade, over everything the sky was. The astronomy does not
+    // stop being drawn — it goes behind a wash of the colour of the planet
+    // you are standing on, so a filled screen still reads as *this* world's
+    // screen from the one strip of canvas left showing between the tiles.
+    // Dark: the colour goes out of the system as the light does. The Sun has
+    // already been turned down at the source above; this is the rest of the
+    // sky following it, walked towards its own grey and then darkened. Not
+    // simply multiplied down — a dimmed picture keeps every hue it had and
+    // just whispers them, whereas a system with the light going out of it
+    // loses the hues first. What survives longest is the difference between
+    // one planet's colour and the next, which is the one thing here you
+    // navigate by.
+    if (DARK > 0.0) {
+        float grey = dot(col, vec3(0.299, 0.587, 0.114));
+        col = mix(col, vec3(grey) * (1.0 - 0.45 * DARK), DARK);
+    }
+
+    col = mix(col, SHADE.rgb, SHADE.a);
 
     // Vignette
     vec2 vc = v_coords - 0.5;

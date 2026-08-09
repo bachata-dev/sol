@@ -50,8 +50,31 @@ chmod +x "$CFG/label.sh"
 say "config installed to $CFG"
 
 # ── the sol command ───────────────────────────────────────────────────────
+# Installed as a module with a stub in front of it, rather than as a script.
+# Python caches compiled bytecode for things it imports and never for a script
+# it was handed, so a 190KB `sol` run directly is 190KB re-parsed on every
+# keypress: 55ms, of which 43ms is the parser and 11ms is the interpreter
+# existing at all. Imported once and compiled, the same command answers in
+# 24ms. Nothing about sol is on a timer, so this is not a load question — it
+# is the difference between a keybinding that feels instant and one that
+# nearly does, paid on every press, every menu item and every click in the bar.
 say "installing sol to /usr/local/bin (sudo)"
-sudo install -m755 bin/sol bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
+sudo install -d /usr/local/lib/sol
+sudo install -m644 bin/sol /usr/local/lib/sol/solmod.py
+# Compiled as root at install time, because the directory is root-owned: a
+# stale or missing .pyc is silently re-parsed and re-written by whoever runs
+# it next, and that user cannot write here. Failure is only slowness, so it
+# does not stop the install.
+sudo python3 -m compileall -q /usr/local/lib/sol >/dev/null 2>&1 || true
+printf '%s\n' '#!/usr/bin/env python3' \
+  '# The sol command. The code is /usr/local/lib/sol/solmod.py, imported' \
+  '# rather than run so its compiled form is cached — see install.sh.' \
+  'import sys' \
+  'sys.path.insert(0, "/usr/local/lib/sol")' \
+  'import solmod' \
+  'solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
+sudo chmod 755 /usr/local/bin/sol
+sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
                    bin/sol-session bin/driftwm-up /usr/local/bin/
 # opt-in extras: installed, but nothing starts them until you say so
 sudo install -m755 bin/sol-planetarium bin/sol-spin /usr/local/bin/

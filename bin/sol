@@ -21,6 +21,13 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol dive                     go to the place the view is already at
   sol system                   frame the whole solar system
   sol arrange [where|all]      tidy a planet's windows into a grid
+  sol focus [n]                fill the screen with this planet's windows
+  sol solo [word]              one window, a column wide, the sky nearly off
+  sol present                  one window, no chrome, nothing of sol showing
+  sol mode [off]               which mode is on, and the way out of it
+  sol night [on|off|auto|0-1]  dim the sky the way an evening does
+  sol dark [on|off|0-1]        turn the Sun down; the colour goes out with it
+  sol pick <left|right|up|down>  move the focus one tile that way
   sol next / sol prev          step through the windows of this planet
   sol send <name|number>       send the focused window to a planet
   sol back                     the camera to where it was before the last flight
@@ -132,8 +139,17 @@ class Drift:
             socks = sockets()
         except OSError:
             socks = []
+        # Which driftwm, when there is more than one. DRIFTWM_SOCKET wins, as
+        # it does for driftwm's own CLI. Failing that, the instance named by
+        # WAYLAND_DISPLAY — because a second compositor on a spare VT is a
+        # real thing (`driftwm-up` exists to start one) and the first socket
+        # in alphabetical order is then the *other* session: every keybinding
+        # pressed on the new desktop would quietly drive the old one.
         env = os.environ.get("DRIFTWM_SOCKET")
-        path = env if env else (socks[0] if socks else None)
+        display = os.environ.get("WAYLAND_DISPLAY", "")
+        mine = "ipc-%s.sock" % display
+        named = next((s for s in socks if os.path.basename(s) == mine), None)
+        path = env or named or (socks[0] if socks else None)
         if not path:
             sys.exit("sol: driftwm is not running (no IPC socket found)")
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -142,13 +158,37 @@ class Drift:
         self.f = self.s.makefile("rwb")
 
     def req(self, obj):
+        return self.ask(obj)[0]
+
+    def ask(self, obj):
+        """(answer, complaint) — the same round trip, with the Err kept.
+
+        `req` throws the error away, which is right for almost everything
+        here: a move that failed is a window that did not move, and there is
+        nothing useful to say about it. The exception is asking driftwm what
+        it can do at all, where the error text *is* the answer.
+        """
         self.f.write((json.dumps(obj) + "\n").encode())
         self.f.flush()
         line = self.f.readline().decode().strip()
         if not line:
-            return None
+            return None, None
         r = json.loads(line)
-        return r.get("Ok")
+        return r.get("Ok"), r.get("Err")
+
+    def can_resize(self):
+        """Whether this driftwm has a Resize at all.
+
+        Asked rather than assumed, because sol runs against whatever driftwm
+        is installed and `Resize` arrived late. Without it every mode here
+        would still move windows and simply not size them — a screen laid out
+        in tiles and filled with windows the wrong size, which is worse than
+        not doing it. A bare `Resize` reads the focused window's size, so an
+        installation that has the request answers something; one that does not
+        complains about an unknown variant, and that complaint is the answer.
+        """
+        _, err = self.ask({"Resize": {}})
+        return not (err and "unknown variant" in err)
 
     def camera(self):
         c = self.req({"Camera": None})
@@ -187,6 +227,77 @@ class Drift:
         for wid, x, y in items:
             self.f.write((json.dumps(
                 {"Move": [int(wid), [int(round(x)), int(round(y))]]}) + "\n").encode())
+        self.f.flush()
+        for _ in items:
+            self.f.readline()
+
+    def resize(self, wid, w, h):
+        # Sizes here are the *visual frame* — the client's content plus any
+        # title bar and border the compositor drew — which is the same thing
+        # `state` reports. So a layout computed from the sizes in `state`
+        # tiles exactly, and nothing has to know which windows are
+        # server-decorated. The request is clamped to the client's own
+        # minimum and maximum and the reply echoes what was asked for rather
+        # than what was committed, so it is not worth reading back.
+        self.req({"Resize": {"window": int(wid),
+                             "to": [int(round(w)), int(round(h))]}})
+
+    def lay_out(self, items, already=None):
+        """Send a layout, skipping the windows that are already in it.
+
+        `already` is {id: (position, size)} as the state last reported. A
+        window whose target is where it already is costs two requests, two
+        client round trips and — because driftwm re-resolves overlaps on
+        every geometry change — a share of a collision pass over every other
+        window near it. Re-laying a mode after one tile closed used to resend
+        all sixty-five of the parked ones for nothing.
+        """
+        if already:
+            items = [it for it in items
+                     if not settled(already.get(it[0]), it)]
+        self._lay_out(items)
+
+    def _lay_out(self, items):
+        """A whole layout — every window's place and its size — on one flush.
+
+        Move first, then resize, and the order is not a preference. A resize
+        keeps the window's visual centre, so sizing about a centre the move
+        has already set lands exactly; doing it the other way round loses to
+        driftwm's snapping. A district that has been through `sol arrange` is
+        a snap cluster, and a window that grows into the neighbour it is
+        snapped to is relocated *beside* the cluster rather than left where it
+        was put — and the camera is panned after it if it was focused. Moving
+        first means every window is already standing in its own cell with a
+        gap around it, so nothing ever grows into anything.
+
+        Both halves of each window go out together and every reply is read
+        back together, for the reason `move_many` does it: a district of
+        twelve is one round trip rather than twenty-four.
+        """
+        for wid, w, h, x, y in items:
+            self.f.write((json.dumps(
+                {"Move": [int(wid), [int(round(x)), int(round(y))]]}) + "\n").encode())
+            self.f.write((json.dumps(
+                {"Resize": {"window": int(wid),
+                            "to": [int(round(w)), int(round(h))]}}) + "\n").encode())
+        self.f.flush()
+        for _ in items:
+            self.f.readline()
+            self.f.readline()
+
+    def opacity_many(self, items):
+        """Every window's opacity on one flush.
+
+        `spotlight` sets one for every window on the canvas, and did it a
+        round trip at a time: fine at nine windows and a fifth of a second at
+        sixty, on a path that runs after every tidy, every step and every
+        mode leaving. Written together and read back together for the same
+        reason `move_many` is.
+        """
+        for wid, value in items:
+            self.f.write((json.dumps(
+                {"Opacity": {"window": int(wid),
+                             "value": float(value)}}) + "\n").encode())
         self.f.flush()
         for _ in items:
             self.f.readline()
@@ -663,6 +774,16 @@ def grid(place, wins, aspect):
     among nine terminals would otherwise inflate all ten cells and swell the
     district to no purpose. Every break point is tried; the one whose block
     best matches the shape of the screen wins.
+
+    Every position for the planet against every break point, each scored over
+    the whole block, is cubic — and it is the most expensive thing sol
+    computes, at about 1.3ms for a full grid. It stays because DECK caps what
+    reaches it at twelve windows and nothing calls it on a beat: a tidy, a
+    drag that reorders, a mode working out where a district would sit. The
+    bound is the cap, so if DECK ever rises this is the function that pays
+    for it — measured, not guessed: the obvious saving, skipping break points
+    that produce the same rows, turns out never to fire, because widening the
+    target by one window nearly always moves a row.
     """
     if not wins:
         return [], 0.0, 0.0
@@ -786,9 +907,12 @@ def tidy(d, st, place, aspect, plan=None):
 
 # ── When a planet fills right up ──────────────────────────────────────────
 # A district can only grow so far before framing it puts the windows below the
-# size at which they are any use, and driftwm's IPC has no resize — position,
-# opacity, focus and close are the whole toolkit — so shrinking them to fit is
-# not on the table. What is left is to stop laying all of them out.
+# size at which they are any use. Shrinking them to fit is not the answer even
+# now that driftwm has a Resize: a window on the canvas is the size you gave
+# it, and a grid that quietly halved everything to make room would be sol
+# deciding how big your editor is. What is left is to stop laying all of them
+# out — and the size a window keeps here is exactly what makes a mode able to
+# hand it back afterwards.
 #
 # So the grid holds the DECK most recently used and the rest collapse into a
 # stack at its corner: still there, still counted, still reachable with
@@ -813,12 +937,14 @@ def stacks(st):
 def spotlight(d, st, focused=None):
     """Bring the focused window forward and set the rest a touch back."""
     deep = stacks(st)
+    want = []
     for w in real_windows(st):
         if w["id"] in deep:
-            d.opacity(w["id"], max(0.20, DECK_DIM - 0.04 * deep[w["id"]]))
+            want.append((w["id"], max(0.20, DECK_DIM - 0.04 * deep[w["id"]])))
             continue
         lit = (w["id"] == focused) if focused is not None else w.get("is_focused")
-        d.opacity(w["id"], 1.0 if lit else DIM)
+        want.append((w["id"], 1.0 if lit else DIM))
+    d.opacity_many(want)
 
 
 def promote(st, place, wid):
@@ -942,12 +1068,941 @@ def land_on(st, w):
 
 
 # ── Commands ──────────────────────────────────────────────────────────────
+# ── Modes ─────────────────────────────────────────────────────────────────
+# A mode is a temporary contract about the screen. sol has one standing rule
+# — the camera moves only when you ask it to — and a mode does not get to
+# break it: entering one *is* the asking, and leaving puts back what it
+# found. So every mode writes down what it is about to change before it
+# changes anything, and the exit is a restore rather than a reconstruction.
+#
+# Exactly one is ever on, because two modes each holding an opinion about
+# where your windows go is not a feature. Entering a second leaves the first.
+#
+# All of this rests on one thing driftwm gained and sol never had: `Resize`.
+# Until it existed a district could only be *arranged*, never *fitted* — the
+# stack at DECK exists precisely because windows could not be made smaller.
+# A mode that fills a screen is the first thing sol can do with a size.
+MODE = runtime("sol-mode.json")
+
+FOCUS_GAP = 8          # between tiles, in screen pixels
+FOCUS_EDGE = 8         # and around the whole block — the same, so it reads even
+CHROME = 28            # what the bar reserves at the top, the footer at the foot
+READ_COL = 1180        # solo's column: wide enough for code, narrow enough to read
+READ_MOST = 0.82       # ...but never most of a small screen, or it is a maximise
+
+# How round a window stays while a mode is on. The canvas radius exists so a
+# window reads as nested inside its district's card — concentric with the
+# rounded rectangle behind it, which is why 24 there and 70 on the card are
+# one decision. A mode has no card to be concentric with: the tiles *are* the
+# screen, and at 24 the corner turns into a bite showing the shade through.
+# Not square either — a hard corner reads as a rendering fault next to a
+# title bar that still has soft edges. 8 is the smallest radius that still
+# looks intended.
+MODE_CORNER = 8
+
+# Below this a tile is visible but not workable, and a screen that cannot hold
+# them all should say so by holding fewer rather than by shrinking everything
+# past use. It is the floor a terminal stops being a terminal at, which is why
+# it is a size and not a fraction of the screen — a 13-inch laptop and a 27-inch
+# iMac disagree about how many windows fit and agree about how small is too
+# small.
+MIN_TILE = (460, 300)
+
+# How dark a mode takes the sky, and how much of the planet's own colour
+# survives in it. Focus leaves the world you are standing on legible behind
+# your work — that is the point of it being *this* planet's mode; solo takes
+# the light down to almost nothing, because solo is about one window.
+SHADES = {"focus": (0.10, 0.88), "solo": (0.03, 0.97), "present": (0.0, 1.0)}
+
+# The key each mode answers to, which is also the key that leaves it. Kept
+# here so the menu, the help card and the bar can all say the same thing
+# without three copies of it drifting apart.
+MODE_KEYS = {"focus": "mod+t", "solo": "mod+shift+t", "present": "mod+shift+p"}
+
+
+def rgb(hexcolour):
+    """`#7aa2f7` as the three floats a shader wants."""
+    h = hexcolour.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def mode_now():
+    """The mode that is on, as it was written down — or {} for none."""
+    try:
+        with open(MODE) as f:
+            m = json.load(f)
+        return m if isinstance(m, dict) and m.get("mode") else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def mode_write(m):
+    """Save the contract, or tear it up. Never worth a crash either way."""
+    try:
+        if m:
+            with open(MODE, "w") as f:
+                json.dump(m, f)
+        else:
+            os.remove(MODE)
+    except OSError:
+        pass
+
+
+def hold(name, place, cam, zoom, wins, **extra):
+    """Write down the screen a mode is about to take over.
+
+    Position *and* size, because a mode is now allowed to change both — which
+    is exactly why the record has to exist. `sol arrange` could always put a
+    district back by recomputing its grid; nothing can recompute the size a
+    window happened to have when you pressed the key.
+    """
+    m = {"mode": name,
+         "place": place.n if place else None,
+         "camera": [cam[0], cam[1], zoom],
+         "windows": [{"id": w["id"], "position": list(w["position"]),
+                      "size": list(w["size"])} for w in wins]}
+    m.update(extra)
+    mode_write(m)
+    return m
+
+
+def release(d, st=None, travel=True):
+    """Leave whatever mode is on, and put back what it found.
+
+    Windows that have closed since are dropped rather than mourned: a mode
+    that refused to exit because one of its terminals is gone would be a
+    trap. Safe to call when no mode is on, which is what makes every mode
+    command a toggle and every other one able to clear the way first.
+    """
+    m = mode_now()
+    if not m:
+        return None
+    st = d.state() if st is None else st
+    live = live_ids(st)
+    back = [(w["id"], w["size"][0], w["size"][1],
+             w["position"][0], w["position"][1])
+            for w in m.get("windows", []) if w["id"] in live]
+    if back:
+        settle_layout(d, back, already=geometry(st))
+    if m.get("chrome"):
+        flip_chrome()
+    mode_write(None)
+    paint(d, shade=(0.0, 0.0, 0.0, 0.0), corner=m.get("corner"))
+    recount(st)
+    spotlight(d, st)                  # the focused window comes forward again
+    if travel and m.get("camera"):
+        cx, cy, cz = m["camera"]
+        fly(d, cx, cy, cz)
+    return m
+
+
+# ── The sky, while a mode is on ───────────────────────────────────────────
+# The same trick `write_cards` runs, for the same reason: driftwm has no
+# uniform sol can reach, but it does reload a shader without disturbing the
+# camera, the windows or the focus. Two numbers live between these markers —
+# the wash a mode lays over the sky, and how far into the evening the palette
+# has gone. The shader file is their only home, which is what lets `sol
+# night` survive a reboot without sol owning a settings file to keep it in.
+MODE_HEAD = "// ── modes ──"
+MODE_TAIL = "// ── end modes ──"
+
+
+def read_paint():
+    """(shade rgba, night, dark) as the shader currently has them."""
+    try:
+        with open(SHADER) as f:
+            block = f.read().partition(MODE_HEAD)[2].partition(MODE_TAIL)[0]
+    except OSError:
+        return (0.0, 0.0, 0.0, 0.0), 0.0, 0.0
+    shade, night, dark = (0.0, 0.0, 0.0, 0.0), 0.0, 0.0
+    for line in block.splitlines():
+        try:
+            if "SHADE" in line:
+                nums = line.partition("vec4(")[2].partition(")")[0]
+                shade = tuple(float(v) for v in nums.split(","))
+            elif "NIGHT" in line:
+                night = float(line.partition("=")[2].strip().rstrip(";"))
+            elif "DARK" in line:
+                dark = float(line.partition("=")[2].strip().rstrip(";"))
+        except ValueError:
+            continue                  # hand-edited into nonsense; take the default
+    return shade, night, dark
+
+
+CONFIG = os.path.expanduser("~/.config/driftwm/config.toml")
+
+
+def decoration_lines(lines):
+    """Index of every `corner_radius` line that belongs to `[decorations]`.
+
+    The key is not unique in this file — the help card, the overview and the
+    name plates each set their own on a `[[window_rules]]` entry, and all four
+    sit at column zero, so neither "the first one" nor "the unindented one"
+    can tell them apart. What can is the table header last seen above them,
+    which is the only thing that decides who a TOML key belongs to.
+    """
+    table, found = "", []
+    for i, line in enumerate(lines):
+        bare = line.strip()
+        if bare.startswith("["):
+            table = bare
+        elif bare.startswith("corner_radius") and table == "[decorations]":
+            found.append(i)
+    return found
+
+
+def read_corner():
+    """`decorations.corner_radius` as the config currently has it.
+
+    Read rather than remembered, because it is the user's number: the comment
+    above it in config.toml explains what it is for and invites changing it,
+    and a mode that put back 24 rather than what it found would quietly undo
+    that the first time anyone pressed mod+t.
+    """
+    try:
+        with open(CONFIG) as f:
+            lines = f.readlines()
+        for i in decoration_lines(lines):
+            return int(float(lines[i].partition("=")[2].strip().split()[0]))
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def write_corner(px):
+    """Set the corner radius. True when the file actually changed.
+
+    One line rewritten in place rather than a generated block, because this
+    is somebody else's config file and a TOML table is a thing to be a guest
+    in — the comment above the key explains what it is for and has to survive
+    being a guest too.
+    """
+    try:
+        with open(CONFIG) as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+    want = "corner_radius = %d\n" % px
+    hit = [i for i in decoration_lines(lines) if lines[i] != want]
+    if not hit:
+        return False
+    for i in hit:
+        lines[i] = want
+    try:
+        with open(CONFIG, "w") as f:
+            f.writelines(lines)
+    except OSError:
+        return False
+    return True
+
+
+def paint(d, shade=None, night=None, dark=None, corner=None):
+    """Set the sky's mode block, and reload only if it actually moved.
+
+    Every value is read back before any of them is written, so `sol focus` at
+    dusk does not undo `sol night` and leaving focus does not turn the
+    evening back on. A reload costs a shader recompile, which is why nothing
+    here writes a file it did not change.
+    """
+    # The corner rides along because driftwm reloads one config, not two: the
+    # shader and the decorations come back together, or the screen flickers
+    # twice for one keypress.
+    moved = write_corner(corner) if corner is not None else False
+
+    was_shade, was_night, was_dark = read_paint()
+    shade = was_shade if shade is None else shade
+    night = was_night if night is None else night
+    dark = was_dark if dark is None else dark
+    try:
+        with open(SHADER) as f:
+            src = f.read()
+    except OSError:
+        src = None
+    if src is not None:
+        head, mark, rest = src.partition(MODE_HEAD)
+        _, mark2, tail = rest.partition(MODE_TAIL)
+        if mark and mark2:
+            block = "%s\nconst vec4 SHADE = vec4(%.4f, %.4f, %.4f, %.4f);\n" \
+                    "const float NIGHT = %.4f;\nconst float DARK = %.4f;\n" \
+                    % ((MODE_HEAD,) + tuple(shade) + (night, dark))
+            new = head + block + MODE_TAIL + tail
+            if new != src:
+                try:
+                    with open(SHADER, "w") as f:
+                        f.write(new)
+                    moved = True
+                except OSError:
+                    pass
+    if moved:
+        d.action("reload-config")
+
+
+def wash(place, kind):
+    """The shade a mode lays over the sky, in the colour of where you are."""
+    dark, amount = SHADES[kind]
+    r, g, b = rgb(place.colour) if place else (0.0, 0.0, 0.0)
+    return (r * dark, g * dark, b * dark, amount)
+
+
+# ── Filling a screen ──────────────────────────────────────────────────────
+def usable(st, chrome=True):
+    """The screen a mode may fill, inset by the bar, the footer and a margin.
+
+    The bar and the footer reserve the same 28 pixels at opposite edges, so
+    what is left is still centred on the middle of the screen — which is why
+    every mode here can park the camera on the planet and trust the block to
+    land square. Present mode passes `chrome=False`, having just taken both
+    of them away.
+    """
+    w, h = screen(st)
+    edge = 2.0 * FOCUS_EDGE
+    return w - edge, h - (2.0 * CHROME if chrome else 0.0) - edge
+
+
+def panes(n, width, height, gap=FOCUS_GAP):
+    """`n` rectangles filling a box: rows shaped like the box itself.
+
+    Rows rather than a fixed grid, because a grid leaves holes — three
+    windows in a 2x2 is a quarter of the screen showing nothing, and the eye
+    goes straight to it. Filling rows and letting a short row share the full
+    width means every pixel belongs to somebody, which is the whole point of
+    a mode that fills the screen.
+
+    How many rows is settled by the test `grid` already applies to a
+    district, for the same reason: the split whose cells come closest in
+    shape to the screen they are on, because a cell shaped like the screen is
+    a cell you can work in. Ties go to fewer rows, so two windows land side
+    by side rather than stacked — text is taller than it is wide, and two
+    columns is what you wanted.
+    """
+    best = None
+    for rows in range(1, n + 1):
+        base, extra = divmod(n, rows)
+        if base == 0:
+            break                     # more rows than windows to put in them
+        counts = [base + 1] * extra + [base] * (rows - extra)
+        ch = (height - gap * (rows - 1)) / rows
+        score = sum(c * abs(math.log(((width - gap * (c - 1)) / c / ch)
+                                     / (width / height))) for c in counts) / n
+        if best is None or score < best[0]:
+            best = (score, counts, ch)
+
+    _, counts, ch = best
+    out, y = [], height / 2.0 - ch / 2.0
+    for c in counts:
+        cw = (width - gap * (c - 1)) / c
+        x = -width / 2.0 + cw / 2.0
+        for _ in range(c):
+            out.append((x, y, cw, ch))
+            x += cw + gap
+        y -= ch + gap
+    return out
+
+
+def arrive(d, place):
+    """Fly to a planet, and let the view actually stop before building on it.
+
+    `fly` streams the camera and sends the zoom exactly once, because driftwm
+    re-derives the camera from the zoom as it renders and a zoom command per
+    frame drags the flight backwards. The consequence is that the flight is
+    over before the zoom has finished easing — which is harmless when the
+    next thing that happens is nothing, and is not harmless at all when the
+    next thing is a screen being laid out. The tiles get measured against one
+    viewport and drawn into another, and everything lands off by the
+    difference: entering focus from a framed district put the whole block
+    most of a tile away from where it was computed to go.
+
+    So the mode waits for the number to settle rather than assuming it has,
+    and then says where the camera is one final time.
+    """
+    fly(d, place.x, place.y, WORK_ZOOM)
+    end = time.time() + 0.8
+    while time.time() < end:
+        if abs(d.zoom() - WORK_ZOOM) < 0.002:
+            break
+        time.sleep(0.03)
+    d.set_camera(place.x, place.y)
+
+
+def settled(had, item):
+    """Is this window already where the layout is about to put it?
+
+    A window's committed size is not always the size it was asked for — a
+    terminal rounds to whole character cells — so a tile that arrived one
+    pixel short would otherwise be re-sent on every re-lay for ever. The
+    slack is what a client is allowed to have rounded by; the position has to
+    be exact, because sol chose it.
+    """
+    if not had:
+        return False
+    (px, py), (pw, ph) = had
+    _, w, h, x, y = item
+    return (abs(px - x) < 1.0 and abs(py - y) < 1.0
+            and abs(pw - w) <= SIZE_SLACK and abs(ph - h) <= SIZE_SLACK)
+
+
+SIZE_SLACK = 24        # a character cell or two: what a client may round by
+
+
+def geometry(st):
+    """{id: (position, size)} for everything on the canvas, for `lay_out`."""
+    return {w["id"]: (tuple(w["position"]), tuple(w["size"]))
+            for w in st.get("windows", [])}
+
+
+def hold_camera(d, place, quiet=0.25, cap=1.0):
+    """Hold the camera on the planet until it stops trying to leave.
+
+    driftwm brings a newly focused window into view, which is exactly right
+    on a canvas you are panning around and exactly wrong inside a mode: the
+    tiles are already on the screen, and the screen is the one thing that
+    must not move. There is no per-request flag to suppress it, so it is
+    argued with rather than prevented — and the argument has to be held,
+    for the same reason `fly` streams instead of setting: driftwm eases
+    towards its own target, so a single correction made the instant after
+    the focus reads a camera that has not moved yet, and loses half a second
+    later.
+
+    Timed by the camera rather than by the clock. It returns once the view
+    has sat still for `quiet` seconds together, and gives up after `cap`.
+    A fixed wait could not be both: the pan is decided while the tiles are
+    still growing and lands some way after the resize that triggered it, so
+    half a second was dead time on the four-tile case that never pans and
+    too short on the twelve-tile case that does.
+    """
+    end = time.time() + cap
+    still = time.time() + quiet
+    while time.time() < still and time.time() < end:
+        cx, cy = d.camera()
+        if abs(cx - place.x) > 0.5 or abs(cy - place.y) > 0.5:
+            d.set_camera(place.x, place.y)
+            still = time.time() + quiet      # it moved; start the count over
+        time.sleep(0.04)
+
+
+def settle_layout(d, items, place=None, already=None):
+    """Apply a whole layout as sol's own work, with the watcher held off.
+
+    `glide` marks its frames with `moving` so `sol watch` cannot mistake them
+    for a drag; a mode's layout is the same claim, made in one step rather
+    than in ninety. Without it the watcher sees four windows move at once,
+    waits for them to settle and files every one of them back into the grid
+    it was just lifted out of — which looks exactly like the mode not working.
+
+    The stamp is held past the last request because a resize is not finished
+    when it is answered: driftwm animates the geometry, and the position
+    events that arrive while it does are the ones that would be read as a
+    drop. RESIZE_SETTLE is that tail, and it is why this is not simply a
+    `with moving():` around the call.
+    """
+    with moving():
+        d.lay_out(items, already)
+        end = time.time() + RESIZE_SETTLE
+        while True:
+            moving.touch()
+            # The camera is held here rather than afterwards because this is
+            # when it is at risk: driftwm decides to pan while the tiles are
+            # still growing, so the window it is deciding about has not
+            # arrived yet. Waiting out the animation and *then* arguing about
+            # the camera was half a second of doing nothing twice.
+            if place is not None:
+                cx, cy = d.camera()
+                if abs(cx - place.x) > 0.5 or abs(cy - place.y) > 0.5:
+                    d.set_camera(place.x, place.y)
+            if time.time() >= end:
+                break
+            time.sleep(0.04)
+
+
+RESIZE_SETTLE = 0.45   # how long driftwm's geometry animation keeps arriving
+# Moving between settled tiles needs far less insurance than building the
+# screen did: a tile that is already in place and fully on screen is one
+# driftwm will not pan to, so this is a guard against the unlucky frame
+# rather than against the animation, and it is on the key you hold down.
+PICK_HOLD = 0.1
+
+
+def fits(n, width, height):
+    """The most of `n` tiles this screen can hold at a size worth having.
+
+    A screen that cannot hold them all should say so by holding fewer, not by
+    shrinking every one of them past use — twelve terminals on a laptop is
+    twelve unreadable rectangles, and the honest answer is six you can work in
+    and six waiting. Counts down rather than solving for it, because `panes`
+    picks its own row split at every count and the smallest cell is whatever
+    that split happens to produce.
+    """
+    # Start from what the screen could possibly hold rather than from what the
+    # district happens to be holding. A 1920 screen fits four cells across and
+    # three down at the floor, so twelve is the answer for any district past
+    # twelve — and counting down from seventy-seven to reach it means seventy
+    # -seven splits computed and thrown away. Each of those splits is itself
+    # quadratic, so the walk was cubic in a number that has no business being
+    # in the arithmetic at all: 39ms at a hundred and twenty windows, for a
+    # question whose answer was twelve before we started.
+    ceiling = max(1, int(width // MIN_TILE[0]) * int(height // MIN_TILE[1]))
+    n = min(n, ceiling)
+    while n > 1:
+        if all(cw >= MIN_TILE[0] and ch >= MIN_TILE[1]
+               for _, _, cw, ch in panes(n, width, height)):
+            return n
+        n -= 1
+    return 1
+
+
+def park(place, wins, below):
+    """Layout entries for the windows a mode is not showing.
+
+    They keep their size and wait a screen under the block: still open, still
+    counted by the bar, still one `mod+n` away — just not in front of the
+    ones you asked for.
+
+    Laid side by side rather than piled. The stack on the canvas overlaps on
+    purpose, because a pile is what it is meant to look like; nobody ever
+    looks at these, and stacking sixty-five windows on one spot hands the
+    compositor sixty-five mutually overlapping rectangles to re-resolve on
+    every geometry change it makes. That cost is quadratic and it is paid on
+    a picture no one is looking at.
+    """
+    out, x = [], place.x
+    for w in wins:
+        ww, wh = w["size"]
+        out.append((w["id"], ww, wh, x + ww / 2.0, place.y - below - wh))
+        x += ww + GAP
+    return out
+
+
+def switch(d, st, name):
+    """The state to build `name` from, or None if this press was a way out.
+
+    Pressing a mode's own key again is how you leave it — that is the whole
+    contract, and it is why each of these is a toggle. But pressing a
+    *different* mode's key is not a request to leave; it is a request to be
+    somewhere else. Only one mode is ever on, so the first still has to end,
+    and then the second still has to start. Treating every press as "leave
+    whatever is on" made mod+shift+t from inside focus land you on the bare
+    canvas, one key short of the thing you asked for.
+
+    The state is read again on the way through, because `release` has just
+    put every window back to the size and the place it came in at, and the
+    layout about to be computed has to be computed from that.
+    """
+    m = mode_now()
+    if not m:
+        return st
+    was = m["mode"]
+    release(d, st)
+    if was == "present":
+        notifications(True)
+    if was == name:
+        refresh(d)
+        return None
+    return d.state()
+
+
+def standing(d, st, verb):
+    """The planet a mode is about to act on, or an exit if there is not one.
+
+    A mode fills *a place's* screen, so "the whole system" and "deep space"
+    are not answers it can work with — and saying so is more use than
+    silently picking the nearest planet and moving somebody's windows.
+    """
+    if not d.can_resize():
+        sys.exit("sol %s: this driftwm has no Resize, so sol can place windows "
+                 "but not size them — and a mode that filled the screen with "
+                 "windows the wrong size would be worse than none. Update "
+                 "driftwm; `sol doctor` says so too." % verb)
+    cam, z = d.camera(), d.zoom()
+    place, on_it, _ = whereabouts(st, cam, z)
+    if place is None or not on_it:
+        sys.exit("sol %s: you are not on a planet — fly to one first "
+                 "(mod+1 … mod+8)" % verb)
+    return place, cam, z
+
+
+def cmd_focus(args):
+    """Fill the screen with this planet's windows; the world goes to shade.
+
+    The district stops being a grid on a canvas you are looking at and
+    becomes the screen itself. What is left of the planet is its colour,
+    washed over the sky behind the tiles — which is enough to know where you
+    are standing without any of it competing with the work.
+
+    Press it again to leave, and everything goes back the size and the shape
+    it was, because that was written down before any of it moved.
+    """
+    d = Drift()
+    st = switch(d, d.state(), "focus")
+    if st is None:
+        return
+    place, cam, z = standing(d, st, "focus")
+    wins = district(st, place)
+    if not wins:
+        sys.exit("sol focus: %s is holding nothing" % place.name)
+    n = len(wins)
+    if args and args[0].isdigit():
+        n = max(1, min(n, int(args[0])))
+    uw, uh = usable(st)
+    room = fits(n, uw, uh)
+    if room < n:
+        # Said out loud rather than done quietly: the windows that did not fit
+        # are still open and still counted, and a screen that silently held
+        # back four of them would read as sol having lost them.
+        say("focus · %d of %d — the rest would not fit this screen" % (room, n))
+        n = room
+    show, rest = wins[:n], wins[n:]
+
+    plate = plate_of(st, place)
+    hold("focus", place, cam, z, wins + ([plate] if plate else []),
+         corner=read_corner())
+    arrive(d, place)                             # arrive, then watch it assemble
+    # Only if it is not already the answer. A Focus is what makes driftwm
+    # consider bringing a window into view, and considering it during a
+    # resize is the whole reason the camera has to be held down afterwards —
+    # so the cheapest version of that fight is the one not started. The
+    # window you were last working in is nearly always one of the tiles.
+    if not any(w.get("is_focused") for w in show):
+        d.focus(show[0]["id"])
+    lay_focus(d, st, place, show, rest)
+    # The shade before the last of the camera holding, not after: the hold
+    # is time spent saying nothing has moved, and putting the sky behind it
+    # meant the tiles landed and the world went dark a beat later.
+    paint(d, shade=wash(place, "focus"), corner=MODE_CORNER)
+    hold_camera(d, place)
+    recount(st)
+    refresh(d)
+
+
+def lay_focus(d, st, place, show, rest):
+    """Tile `show` across the screen and put `rest` out of the way.
+
+    Split out from `cmd_focus` because it is wanted twice: once when the mode
+    is entered, and again every time the district changes under it. A tiling
+    that keeps a hole where a window used to be is not a tiling.
+    """
+    uw, uh = usable(st)
+    items = [(w["id"], cw, ch, place.x + cx, place.y + cy)
+             for w, (cx, cy, cw, ch) in zip(show, panes(len(show), uw, uh))]
+    items += park(place, rest, uh)
+    # The name plate goes with them. It is the one window a filled screen
+    # cannot hide behind a tile — it sits above the district, so what shows
+    # through the gaps between the tiles is the plate, spelling out the name
+    # of a planet whose colour is already saying it.
+    plate = plate_of(st, place)
+    if plate:
+        items += park(place, [plate], uh * 2.0)
+    settle_layout(d, items, place, geometry(st))
+    # Every tile equal, none in front: a mode has no "the rest, a touch back",
+    # because the rest are the screen.
+    d.opacity_many([(w["id"], 1.0) for w in show])
+
+
+def remode(d, st):
+    """Draw the mode again over whatever the district is holding now.
+
+    Closing a tile has to close the gap, and a window opening into a filled
+    screen has to land on it — otherwise it is filed away on the canvas
+    behind the tiles, which is somewhere you cannot see. Both are the same
+    event: the district changed under a contract that describes it, so the
+    contract is drawn again.
+
+    The record is amended rather than rebuilt. A window that was already here
+    keeps the size and the place it will be handed back, because that is the
+    one thing nothing can recompute; a window that has just arrived gets the
+    geometry it opened with, which is what it should return to. And a mode
+    whose last window closes has nothing left to be a mode about, so it ends.
+    """
+    m = mode_now()
+    if not m or not isinstance(m.get("place"), int) or moving.busy():
+        return False
+    place = PLACES[m["place"]]
+    wins = district(st, place)
+    plate = plate_of(st, place)
+    now = [w["id"] for w in wins] + ([plate["id"]] if plate else [])
+    if set(now) == {w["id"] for w in m.get("windows", [])}:
+        return False
+    if not wins:
+        release(d, st, travel=False)
+        refresh(d)
+        return True
+
+    saved = {w["id"]: w for w in m.get("windows", [])}
+    m["windows"] = [saved.get(w["id"], {"id": w["id"],
+                                        "position": list(w["position"]),
+                                        "size": list(w["size"])})
+                    for w in wins + ([plate] if plate else [])]
+    mode_write(m)
+
+    if m["mode"] == "focus":
+        uw, uh = usable(st)
+        n = fits(len(wins), uw, uh)
+        lay_focus(d, st, place, wins[:n], wins[n:])
+    else:
+        # One window was showing and it may be the one that just went. The
+        # next in the district takes the screen rather than the mode emptying
+        # out — a deck that loses a slide is still a deck.
+        want = next((w for w in wins if w["id"] == m.get("showing")), None) \
+            or next((w for w in wins if w.get("is_focused")), wins[0])
+        size = solo_size(st) if m["mode"] == "solo" else usable(st, chrome=False)
+        show_one(d, st, place, wins, want, *size)
+    recount(st)
+    refresh(d)
+    return True
+
+
+def cmd_solo(args):
+    """One window, in a column you can read, with the sky turned nearly off.
+
+    The opposite of focus and its natural other half: focus is everything
+    here at once, solo is this and nothing. It is a column rather than a
+    maximise because maximising a text window on a 27-inch screen gives you
+    a 200-character line, which nobody has ever wanted — the width that
+    helps is the one a page has always had.
+    """
+    d = Drift()
+    st = switch(d, d.state(), "solo")
+    if st is None:
+        return
+    place, cam, z = standing(d, st, "solo")
+    wins = district(st, place)
+    if not wins:
+        sys.exit("sol solo: %s is holding nothing" % place.name)
+    want = next((w for w in wins if w.get("is_focused")), wins[0])
+    if args:
+        named = [w for w in wins if args[0].lower() in win_name(w).lower()]
+        if named:
+            want = named[0]
+
+    plate = plate_of(st, place)
+    hold("solo", place, cam, z, wins + ([plate] if plate else []),
+         corner=read_corner())
+    arrive(d, place)
+    show_one(d, st, place, wins, want, *solo_size(st))
+    paint(d, shade=wash(place, "solo"), corner=MODE_CORNER)
+    recount(st)
+    refresh(d)
+
+
+# ── Present ───────────────────────────────────────────────────────────────
+def flip_chrome():
+    """Show the bar and the footer if they are hidden, hide them if not.
+
+    waybar has toggled its own visibility on SIGUSR1 since long before sol
+    existed, so this is one signal rather than a process to kill and respawn
+    — a bar that was only hidden comes back with its modules intact, its
+    signals still wired, and no gap where it used to be.
+
+    A toggle rather than a setting because the signal is one, and waybar will
+    not say which way it is. What keeps the two ends honest is the `chrome`
+    flag in the mode's own record: present is the only thing that flips it,
+    and leaving present is the only thing that flips it back.
+    """
+    wake("waybar", signal.SIGUSR1)
+
+
+def notifications(on):
+    """Ask mako to hold everything, or to stop holding it.
+
+    Guarded rather than required: presenting on a machine without mako should
+    hide the bar and fill the screen exactly the same, not fail at the last
+    step over a notification daemon that was never running.
+    """
+    import subprocess
+    try:
+        subprocess.run(["makoctl", "mode", "-r" if on else "-a",
+                        "do-not-disturb"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, ValueError):
+        pass
+
+
+def cmd_present(args):
+    """One window, the whole screen, and nothing else of sol showing.
+
+    The mode that lets you screen-share this desktop without also sharing
+    your solar system. The bar and the footer go, the name plates go with
+    them, notifications are held, and the sky goes black — so what lands in
+    the capture is your window and a dark background, which is what everyone
+    else's desktop looks like and exactly what a projector should get.
+
+    `mod+n` and `mod+p` step to the next window without leaving, because a
+    deck of slides is what a district turns into once it is one window at a
+    time on a black screen.
+    """
+    d = Drift()
+    st = switch(d, d.state(), "present")
+    if st is None:
+        return
+    place, cam, z = standing(d, st, "present")
+    wins = district(st, place)
+    if not wins:
+        sys.exit("sol present: %s is holding nothing" % place.name)
+    want = next((w for w in wins if w.get("is_focused")), wins[0])
+
+    plate = plate_of(st, place)
+    hold("present", place, cam, z, wins + ([plate] if plate else []),
+         chrome=True, corner=read_corner())
+    flip_chrome()
+    notifications(False)
+    arrive(d, place)
+    show_one(d, st, place, wins, want, *usable(st, chrome=False))
+    paint(d, shade=wash(place, "present"), corner=MODE_CORNER)
+
+
+def solo_size(st):
+    """A column you can read a line in, as tall as the screen allows.
+
+    Capped by a fraction as well as by a width, because on a small screen the
+    absolute cap stops being a column: 1180 of a 1366-wide laptop is the whole
+    screen with a margin, which is a maximise wearing solo's name. The
+    absolute number is what a page is; the fraction is what keeps it a column.
+    """
+    uw, uh = usable(st)
+    return min(READ_COL, uw * READ_MOST), uh
+
+
+def show_one(d, st, place, wins, want, width, height):
+    """One window at this size, centred, and everything else out of sight.
+
+    What solo and present both are, at two different widths. The name plate
+    goes with the rest: it is furniture, it says the name of a planet nobody
+    is looking at any more, and in present it would be the one thing in the
+    capture that gives the whole solar system away.
+    """
+    items = [(want["id"], width, height, place.x, place.y)]
+    items += park(place, [w for w in wins if w["id"] != want["id"]], height)
+    plate = plate_of(st, place)
+    if plate:
+        items += park(place, [plate], height * 2.0)
+    settle_layout(d, items, place, geometry(st))
+    d.opacity(want["id"], 1.0)
+    d.focus(want["id"])
+    hold_camera(d, place)
+    m = mode_now()
+    if m:
+        m["showing"] = want["id"]
+        mode_write(m)
+
+
+# ── Night ─────────────────────────────────────────────────────────────────
+NIGHT_FULL = 0.55      # as far down as the palette goes; past this it is a wall
+
+
+def night_by_clock():
+    """How far into the evening it is, as a number between 0 and 1.
+
+    By the hour rather than by the real sunset, which sol could compute and
+    deliberately does not: the position of the Sun on this canvas is an
+    astronomical fact worth being exact about, and what time your eyes want
+    the screen dimmer is not. Quantised, because every change here costs a
+    shader recompile and nobody can see a twentieth of a shade.
+    """
+    h = time.localtime().tm_hour + time.localtime().tm_min / 60.0
+    if 7.0 <= h < 19.0:
+        ramp = 0.0
+    elif h >= 19.0:
+        ramp = min(1.0, (h - 19.0) / 3.0)          # down over the evening
+    else:
+        ramp = min(1.0, max(0.0, (7.0 - h) / 2.0))  # and back up before seven
+    return round(ramp * 4.0) / 4.0 * NIGHT_FULL
+
+
+def level_from(arg, was, full, verb):
+    """The number a palette command was asked for. Bare, it toggles."""
+    if arg in ("off", "no", "0"):
+        return 0.0
+    if arg in ("on", "yes"):
+        return full
+    if arg == "auto":
+        return night_by_clock()
+    if arg:
+        try:
+            return max(0.0, min(1.0, float(arg)))
+        except ValueError:
+            sys.exit("sol %s: want on, off, auto, or a number from 0 to 1" % verb)
+    return 0.0 if was > 0.005 else full
+
+
+def cmd_night(args):
+    """Dim the sky the way an evening does. `on`, `off`, `auto`, or a number.
+
+    Not a mode: it holds no windows, restores nothing and survives a reboot,
+    because the shader file it is written into is the same one the canvas is
+    drawn from. It composes with every mode — a focused planet at midnight
+    is a dim wash of that planet's colour rather than a bright one.
+    """
+    _, was, _ = read_paint()
+    level = level_from((args[0] if args else "").lower(), was, NIGHT_FULL, "night")
+    # Night and dark are two answers to the same question and mixing them
+    # gives neither: one walks the picture towards amber and the other walks
+    # it towards grey, so together they cancel into a muddy nothing. Turning
+    # one on turns the other off, which is also how you swap between them.
+    paint(Drift(), night=level, dark=0.0 if level > 0.005 else None)
+    say("night · %s" % ("off" if level <= 0.005 else "%d%%" % int(level * 100)))
+
+
+DARK_FULL = 0.80       # as far as the light goes out; past this it is a black wall
+
+
+def cmd_dark(args):
+    """Turn the Sun down, and let the colour go out of the system with it.
+
+    The other palette, and the opposite question to night's. Night asks what
+    the sky should look like at eleven at night; this asks what it should
+    look like when you want nothing on it competing for you at all — the
+    corona goes first, then the limb, then the core, and the rest of the sky
+    walks towards its own grey behind it.
+
+    It is deliberately not the same thing as focus. Focus takes the canvas
+    away and gives you the screen; dark leaves the canvas exactly where it is
+    and turns the lights off in it. Sitting at the Sun with dark on is still
+    the whole solar system, still navigable, just cold.
+    """
+    _, _, was = read_paint()
+    level = level_from((args[0] if args else "").lower(), was, DARK_FULL, "dark")
+    paint(Drift(), dark=level, night=0.0 if level > 0.005 else None)
+    say("dark · %s" % ("off" if level <= 0.005 else "%d%%" % int(level * 100)))
+
+
+def cmd_mode(args):
+    """Which mode is on — and `sol mode off` to leave whichever it is."""
+    if args and args[0] in ("off", "none", "leave", "exit"):
+        d = Drift()
+        m = release(d)
+        if m and m.get("mode") == "present":
+            notifications(True)
+        refresh(d)
+        print("off" if m else "no mode was on")
+        return
+    m = mode_now()
+    if not m:
+        _, night, dark = read_paint()
+        palette = (" · night %d%%" % int(night * 100) if night > 0.005 else
+                   " · dark %d%%" % int(dark * 100) if dark > 0.005 else "")
+        print("no mode" + palette)
+        return
+    n = m.get("place")
+    where = PLACES[n].name if isinstance(n, int) and 0 <= n < len(PLACES) else "somewhere"
+    print("%s · %s · %s" % (m["mode"], where, windows_word(len(m.get("windows", [])))))
+
+
 def cmd_goto(args):
     p = find_place(args[0]) if args else None
     if not p:
         sys.exit("sol goto: name a planet (1-8, Mercury..Neptune, a role, or sun)")
     d = Drift()
     st = d.state()
+
+    # A mode belongs to the place it was entered on, so flying somewhere else
+    # ends it. Without travelling back on the way out: the whole point of
+    # this press is to be somewhere new, and a mode that flung you back to
+    # where you started before letting you leave would be a door that fights.
+    m = mode_now()
+    if m and m.get("place") != p.n:
+        release(d, st, travel=False)
+        if m.get("mode") == "present":
+            notifications(True)
+        st = d.state()
     fx, fy, fz = frame(st, p, screen(st))
 
     # A district too big to show at working zoom gets framed. Ask for the same
@@ -984,6 +2039,14 @@ def cmd_dive(args):
 def cmd_hop(args):
     direction = (args[0] if args else "out").lower()
     d = Drift()
+    # Sunward and outward are directions on the canvas, and inside a mode
+    # there is no canvas to be pointed along — but there is a screen, and the
+    # key that means "that way" should keep meaning it. So in a mode the same
+    # press moves the focus one tile instead of the camera one orbit.
+    if mode_now():
+        cmd_pick(["left" if direction in ("in", "sunward", "left", "prev")
+                  else "right"])
+        return
     x, y = d.camera()
     here, dist = nearest(x, y)
     idx = here.n
@@ -1260,6 +2323,92 @@ def cmd_arrange(args):
         fly(d, *frame(st, places[0], (ow, oh)))
 
 
+def step_in_mode(d, st, step):
+    """What `mod+n` means while a mode is on — which is never "fly somewhere".
+
+    In focus every window is already in front of you, so stepping is only a
+    change of focus; flying to a tile that is on the screen would be motion
+    for nothing. In solo and present it is the deck being turned: the next
+    window takes the column, or the slide, and the one that had it goes back
+    to waiting with the others.
+    """
+    m = mode_now()
+    place = PLACES[m["place"]] if isinstance(m.get("place"), int) else None
+    order = [w["id"] for w in m.get("windows", [])]
+    by_id = {w["id"]: w for w in real_windows(st)}
+    wins = [by_id[i] for i in order if i in by_id]
+    if not wins:
+        return
+    cur = next((w for w in wins if w.get("is_focused")), None)
+    nxt = wins[((wins.index(cur) if cur else 0) + step) % len(wins)]
+
+    if m["mode"] == "focus":
+        d.focus(nxt["id"])
+        hold_camera(d, place, PICK_HOLD)
+        return
+    size = solo_size(st) if m["mode"] == "solo" else usable(st, chrome=False)
+    show_one(d, st, place, [w for w in wins if not is_furniture(w)], nxt, *size)
+
+
+def cmd_pick(args):
+    """Move the focus one tile in a direction. Only means anything in a mode.
+
+    `mod+n` steps through a district in the order the grid reads, which is
+    the right answer on a canvas — there is no "left of" on a plane you are
+    panning around. A filled screen is different: the windows are laid out in
+    rows in front of you and "the one to the right" is a thing you can point
+    at, so the arrows mean what they look like they mean.
+
+    Outside a mode it hands the direction to driftwm's own `center-nearest`,
+    which is the same idea for a canvas: the nearest window that way, with
+    the camera going to meet it.
+    """
+    want = (args[0] if args else "").lower()
+    if want not in ("left", "right", "up", "down"):
+        sys.exit("sol pick: which way — left, right, up or down?")
+    d = Drift()
+    m = mode_now()
+    if not m:
+        d.action("center-nearest %s" % want)
+        return
+    st = d.state()
+    by_id = {w["id"]: w for w in real_windows(st)}
+    wins = [by_id[w["id"]] for w in m.get("windows", []) if w["id"] in by_id]
+    cur = next((w for w in wins if w.get("is_focused")), None)
+    if cur is None or len(wins) < 2:
+        return
+    d.focus(neighbour(cur, wins, want)["id"])
+    if isinstance(m.get("place"), int):
+        hold_camera(d, PLACES[m["place"]], PICK_HOLD)
+
+
+def neighbour(cur, wins, way):
+    """The tile one step `way` of this one, or this one if there is none.
+
+    Scored rather than picked off a grid, because sol does not keep the grid
+    — `panes` hands out rectangles and they are the layout. So the answer is
+    read back off the screen: of the windows that genuinely lie that way,
+    the nearest one, with drift across the direction of travel counting
+    several times over so that "right" prefers the tile beside this one to a
+    tile further along the next row down.
+    """
+    ax, ay = cur["position"]
+    step = {"left": (-1, 0), "right": (1, 0), "up": (0, 1), "down": (0, -1)}[way]
+    best, score = cur, None
+    for w in wins:
+        if w["id"] == cur["id"]:
+            continue
+        dx, dy = w["position"][0] - ax, w["position"][1] - ay
+        along = dx * step[0] + dy * step[1]
+        if along <= 1.0:                  # not that way at all
+            continue
+        across = abs(dx * step[1] - dy * step[0])
+        here = along + 3.0 * across
+        if score is None or here < score:
+            best, score = w, here
+    return best
+
+
 def cmd_step(args, step=1):
     """Focus the next window of a place, and fly to it.
 
@@ -1270,6 +2419,9 @@ def cmd_step(args, step=1):
     """
     d = Drift()
     st = d.state()
+    if mode_now() and not args:
+        step_in_mode(d, st, step)
+        return
     ow, oh = screen(st)
     x, y = d.camera()
     here = find_place(args[0]) if args else nearest(x, y)[0]
@@ -1352,9 +2504,12 @@ def _resettle(d, st, wins, dst, others=()):
     origins = {}
     for w in wins:
         origins[w["id"]] = tuple(w["position"])
-        d.move(w["id"], dst.x, dst.y)
         w["position"] = [dst.x, dst.y]
         claims[w["id"]] = dst.n
+    # One flush rather than one round trip each: `sol gather` can be moving
+    # every adrift window on the canvas at once, and this is the teleport it
+    # does before gliding them from where they really were.
+    d.move_many([(w["id"], dst.x, dst.y) for w in wins])
     write_claims(st, claims)
     recount(st)
     plan = []
@@ -1688,7 +2843,15 @@ def cmd_watch(args):
                     sizes[wid] = big
                     try:
                         if not (where and send_home(act, st, w, where)):
-                            if settle_in(act, st, w):
+                            # A window opening into a mode is not settled onto
+                            # the canvas: `settle_in` tidies the district into
+                            # its grid, which would pull every tile off the
+                            # screen so that the new one could be filed behind
+                            # them. The re-lay below puts it on the screen
+                            # instead, which is where you were looking.
+                            if mode_now():
+                                pass
+                            elif settle_in(act, st, w):
                                 footer("%s arrived · mod+a" %
                                        str(w.get("app_id"))[:20])
                     except Exception as e:
@@ -1699,7 +2862,12 @@ def cmd_watch(args):
                 # Shrinking back from something that filled the viewport is
                 # the un-maximise; an ordinary drag-resize is not, and must
                 # not yank the camera. FULL is how sure we insist on being.
-                if was and was[0] >= ow * FULL and was[1] >= oh * FULL \
+                # ...and it is you doing it, not sol. Leaving solo or present
+                # shrinks a window back from the whole screen, which is this
+                # branch's exact shape — and following it would yank the
+                # camera in the middle of a mode putting itself away.
+                if was and not moving.busy() \
+                        and was[0] >= ow * FULL and was[1] >= oh * FULL \
                         and big[0] <= was[0] * SNAP:
                     try:
                         unmaximised(act, st, w)
@@ -1739,6 +2907,16 @@ def cmd_watch(args):
                 raise_up(act, wid)
             except Exception as e:
                 shrug("raising window %d" % wid, e)
+
+        # A mode describes a district, so a district that has gained or lost a
+        # window is a mode that has to be drawn again. Cheap to ask: `remode`
+        # compares two sets of ids and returns immediately when they match,
+        # which is every beat but the ones that matter.
+        if states and mode_now():
+            try:
+                remode(act, states[-1])
+            except Exception as e:
+                shrug("re-laying the mode", e)
 
         # The bar and the plates: promptly when the world moved, lazily when
         # it did not. See BUSY/IDLE.
@@ -2298,9 +3476,19 @@ def write_bar(st, place, on_it, n, z):
     hold_tip = windows_word(n) + " · mod+a tidies" if n else role
     if lost:
         hold_tip += " · %d in no district — sol gather brings them home" % lost
+    # A mode you cannot see you are in is a fault, not a feature — the screen
+    # is behaving differently and nothing on it says why. So it rides in the
+    # header beside the place, in the place's own colour, the way a Mac names
+    # the frontmost app and then what it is doing.
+    m = mode_now()
+    tag, tip = "", "%s — %d%% · mod+u for the whole system" % (role, int(z * 100))
+    if m:
+        tag = '  <span foreground="%s" size="small">%s</span>' % (
+            (place.colour if place else DIMC), m["mode"])
+        tip = "%s mode — %s again leaves it" % (
+            m["mode"], MODE_KEYS.get(m["mode"], "the same key"))
     lines = [
-        {"text": name, "class": cls,
-         "tooltip": "%s — %d%% · mod+u for the whole system" % (role, int(z * 100))},
+        {"text": name + tag, "class": cls, "tooltip": tip},
         {"text": holding, "class": cls, "tooltip": hold_tip},
         {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
         {"text": last_run(), "class": "last", "tooltip": "what sol last did"},
@@ -2502,6 +3690,22 @@ def menu_items(here, n, standing):
             out.append(("item", "Step through its windows", "mod+n",
                         ["sol", "next", token]))
     out.append(("item", "New terminal here", "mod+⏎", ["foot", "-c", FOOT_INI]))
+
+    # Modes act on the screen, which means they act on where you are standing
+    # rather than on what you pointed at — so they only appear when those are
+    # the same place. A mode already on gets one row and it is the way out:
+    # the menu that offered a door is where you look for its handle.
+    mode = mode_now()
+    if mode:
+        out.append(("sep", "", "", None))
+        out.append(("item", "Leave %s mode" % mode["mode"],
+                    MODE_KEYS.get(mode["mode"], ""), ["sol", "mode", "off"]))
+    elif here is not None and standing and n:
+        out.append(("sep", "", "", None))
+        out.append(("item", "Focus — fill the screen", "mod+t", ["sol", "focus"]))
+        out.append(("item", "Solo — one window", "mod+shift+t", ["sol", "solo"]))
+        out.append(("item", "Present — hide everything", "mod+shift+p",
+                    ["sol", "present"]))
     out.append(("sep", "", "", None))
     out.append(("item", "Go to a planet…", "mod+tab", ["sol", "menu", "go"]))
     out.append(("item", "Overview", "mod+e", ["sol-map"]))
@@ -2628,6 +3832,15 @@ def cmd_doctor(args):
         row(OK, "driftwm is up — output %s at %dx%d, zoom %d%%, %d windows"
             % (out.get("name", "?"), *[int(v) for v in (out.get("size") or [0, 0])],
                int((out.get("zoom") or 1) * 100), len(st.get("windows", []))))
+        # The modes are the one part of sol that needs something driftwm did
+        # not always have, and the failure without it is silent rather than
+        # loud — windows placed in tiles at the sizes they already were. So
+        # it is worth a line of its own rather than a surprise at mod+t.
+        if d.can_resize():
+            row(OK, "driftwm can resize — focus, solo and present are available")
+        else:
+            row(WARN, "this driftwm has no Resize — everything works except "
+                      "the modes (mod+t, mod+shift+t, mod+shift+p); update driftwm")
     except SystemExit:
         row(BAD, "driftwm is not running (no IPC socket) — start it, then run this again")
         st = {}
@@ -2781,6 +3994,27 @@ HELP = """
                    to that planet      mod+n/mod+p  step through them
                                        mod+N again  overview, then dive in
                                        mod+shift+a  tidy the whole canvas
+
+   MODES — one key in, the same key out, and nothing survives the exit
+   mod+t           focus    this planet's windows tiled over the whole
+                            screen, the world behind them gone to shade
+   mod+shift+t     solo     one window, a column wide, the sky nearly off
+   mod+shift+p     present  one window, no bar, no footer, no plates —
+                            what to press before you share your screen
+   mod+shift+n     night    dim the sky the way an evening does
+   mod+shift+d     dark     turn the Sun down; the system goes cold
+
+   In focus the arrows move the focus one tile that way — mod+left and
+   mod+right, which mean sunward and outward on the canvas, keep meaning
+   "that way" on a filled screen; mod+up and mod+down join them. mod+n and
+   mod+p still step in grid order, and neither flies anywhere: everything
+   is already in front of you. In solo and present they turn the deck
+   instead, and the next window takes the screen.
+
+   Closing a tile closes the gap and opening a window lands on the tiling,
+   so a filled screen stays filled. A screen that cannot hold every window
+   at a size worth having holds fewer and says so, rather than shrinking
+   all of them past use.
 
    A planet with more windows than fit the screen is framed whole when
    you fly to it; press the same key again to drop into your window.
@@ -3261,6 +4495,9 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "gather": cmd_gather, "sweep": cmd_sweep, "tour": cmd_tour,
         "doctor": cmd_doctor, "first-light": cmd_first_light,
         "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
+        "focus": cmd_focus, "solo": cmd_solo, "present": cmd_present,
+        "mode": cmd_mode, "pick": cmd_pick,
+        "night": cmd_night, "dark": cmd_dark,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}
 
