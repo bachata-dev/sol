@@ -21,11 +21,16 @@ set -u
 LOG="${XDG_RUNTIME_DIR:-/tmp}/sol-session.log"
 
 # What a Wayland session is expected to say about itself. Portals, waybar and
-# anything asking "which desktop is this" read these, and a compositor started
-# from a bare login shell is the one case where nothing else sets them.
-export XDG_SESSION_TYPE=wayland
-export XDG_CURRENT_DESKTOP=driftwm
-export XDG_SESSION_DESKTOP=sol
+# anything asking "which desktop is this" read these.
+#
+# Set only if nobody has: launched from a login screen these come from
+# sol.desktop's DesktopNames, and overwriting them there would be sol
+# contradicting the session it was started as. A compositor started from a
+# bare login shell is the case where nothing else sets them, which is the
+# case this file was written for.
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-sol:driftwm}"
+export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-sol}"
 
 command -v driftwm > /dev/null || {
   echo "sol-session: driftwm is not installed — see https://github.com/malbiruk/driftwm" >&2
@@ -36,6 +41,17 @@ command -v driftwm > /dev/null || {
 # it lives in ~/.config/driftwm/config.toml.
 driftwm > "$LOG" 2>&1
 code=$?
+
+# Take the session down with it. `sol session-ready` starts
+# sol-session.target from driftwm's autostart, and a target that is
+# started and never stopped leaves the portal and the notification daemon
+# running against a compositor that has exited — which matters most in the
+# case this whole file exists for, logging out and back in, where the second
+# session inherits the first one's ghosts. Stopping it is also what tells
+# those services to shut down cleanly rather than be killed with the scope.
+systemctl --user stop sol-session.target > /dev/null 2>&1 || true
+systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+    XDG_SESSION_TYPE XDG_SESSION_DESKTOP > /dev/null 2>&1 || true
 
 # Deliberately not `exec`, and deliberately not a loop. A compositor that dies
 # on startup — a missing GPU, a config typo, a bad connector name — would

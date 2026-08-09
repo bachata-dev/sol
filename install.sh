@@ -46,6 +46,7 @@ if [ -e "$CFG" ]; then
 fi
 mkdir -p "$CFG"
 cp config/* "$CFG/"
+rm -f "$CFG/sol.desktop" "$CFG/sol-portals.conf" "$CFG/sol-session.target"  # machine files
 chmod +x "$CFG/label.sh"
 say "config installed to $CFG"
 
@@ -81,6 +82,18 @@ printf '%s\n' '#!/usr/bin/env python3' \
 sudo chmod 755 /usr/local/bin/sol
 sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
                    bin/sol-session bin/driftwm-up /usr/local/bin/
+
+# The session a login screen offers, and the portal backends it uses. These
+# belong to the machine rather than to a person — every user picks sol from
+# the same list — so they go beside the system's other sessions and not into
+# anyone's home directory.
+sudo install -d /usr/share/wayland-sessions /usr/share/xdg-desktop-portal
+sudo install -m644 config/sol.desktop /usr/share/wayland-sessions/sol.desktop
+sudo install -m644 config/sol-portals.conf \
+                   /usr/share/xdg-desktop-portal/sol-portals.conf
+sudo install -d /etc/systemd/user
+sudo install -m644 config/sol-session.target /etc/systemd/user/sol-session.target
+say "sol is now offered by your login screen, beside every other desktop"
 # opt-in extras: installed, but nothing starts them until you say so
 sudo install -m755 bin/sol-planetarium bin/sol-spin /usr/local/bin/
 

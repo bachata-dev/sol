@@ -444,9 +444,13 @@ On Debian or Ubuntu, take the `.deb` from the
 [latest release](https://github.com/bachata-dev/sol/releases/latest):
 
 ```sh
-sudo apt install ./sol_1.0.1_all.deb     # apt, so it pulls the dependencies
+sudo apt install ./sol_1.1.0_all.deb     # apt, so it pulls the dependencies
 sol setup                                # the config, into your home directory
 ```
+
+After that, **sol is in your login screen**, beside Plasma and anything else installed — pick it
+from the session list the way you would pick any other desktop, and pick your old one to go back.
+Nothing about installing sol takes your machine over.
 
 `sol setup` is a separate step on purpose. A package is installed once for a machine and a config
 belongs to a person — the one here has your monitor's connector name in it — so nothing is written
@@ -471,6 +475,28 @@ package that does not exist makes a `.deb` uninstallable rather than informative
 [its own repository](https://github.com/malbiruk/driftwm). Everything in sol exits cleanly without
 it and `sol doctor` says so in as many words. The screen modes additionally want a driftwm new
 enough to have a `Resize` in its IPC, and refuse with an explanation on one that does not.
+
+### What a session needs to be a desktop
+
+Three files the package installs that have nothing to do with the canvas, and everything to do with
+sol being a desktop you can choose rather than a thing you boot specially:
+
+- **`/usr/share/wayland-sessions/sol.desktop`** is what a login screen reads. Without it there is no
+  way to pick sol except booting specially — a strange thing to ask of someone trying it, and a
+  stranger thing to ask of someone who wants to go back to KDE afterwards.
+- **`/usr/lib/systemd/user/sol-session.target`** is the handle that starts a session.
+  `graphical-session.target` — the thing every portal, notification daemon and keyring agent waits
+  for — refuses to be started by hand and may only be pulled up by something that depends on it. So
+  this is the thing that depends on it, and `sol session-ready` starts it from driftwm's autostart,
+  by which point there is a display to name.
+- **`/usr/share/xdg-desktop-portal/sol-portals.conf`** tells portals which backend this desktop
+  uses. Without it "Share screen" in a browser lists nothing at all and a file dialog takes four
+  seconds to open — and neither of those reports an error, which is what makes it worth a file.
+
+Portals are keyed by `XDG_CURRENT_DESKTOP`, and the value that decides anything is the one the
+session manager holds, not the one in your shell. driftwm sets `driftwm` for the processes it
+spawns, so `sol session-ready` sets `sol:driftwm` explicitly rather than importing what it
+inherited. `sol doctor` reports the value portals will actually read.
 
 Then set your display in the `MACHINE-SPECIFIC` block of `~/.config/driftwm/config.toml` (connector
 name and HiDPI scale — find yours in `driftwm msg state`) and start driftwm from your display

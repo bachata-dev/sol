@@ -1,0 +1,18 @@
+[Unit]
+Description=sol desktop session
+Documentation=https://github.com/bachata-dev/sol
+
+# The handle by which a session is started, because `graphical-session.target`
+# is not one. It carries RefuseManualStart=yes and can only be pulled up by
+# something that depends on it — which is deliberate on systemd's part: the
+# target means "a graphical session is running", and a thing that means
+# something should be true because it is, not because it was switched on.
+#
+# So this is the unit that is true because sol is running, and
+# graphical-session.target comes up behind it. BindsTo rather than Requires
+# for the other direction: if the session target goes away, everything wired
+# to a graphical session goes with it, which is what makes logging out clean
+# up after itself rather than leave a portal talking to a dead compositor.
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

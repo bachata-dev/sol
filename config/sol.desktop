@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=sol
+Comment=Your desktop is the solar system
+Exec=sol-session
+TryExec=sol-session
+Type=Application
+DesktopNames=sol;driftwm
+Keywords=canvas;infinite;wayland;driftwm;solar system
+
+# What a login screen reads to offer sol beside every other desktop on the
+# machine. Without it there is no way to choose sol except booting specially,
+# which is a strange thing to ask of someone who just wants to try it — and a
+# stranger thing to ask of someone who wants to go back to KDE afterwards.
+#
+# DesktopNames becomes XDG_CURRENT_DESKTOP, which is how everything else on
+# the system finds out which desktop it is running under: portals pick their
+# backend by it, applications pick their file dialogs by it, and
+# `sol-portals.conf` beside this file is named for the first entry.
+#
+# `sol` first and `driftwm` second, because they are two different questions.
+# Applications asking "which desktop" want the session; anything that cares
+# about the compositor underneath can look past the semicolon.

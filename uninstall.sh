@@ -12,6 +12,9 @@ sudo rm -f /usr/local/bin/sol /usr/local/bin/sol-help /usr/local/bin/sol-map /us
            /usr/local/bin/sol-spin /usr/local/bin/sol-planetarium \
            /usr/local/bin/driftwm-up
 # `sol` itself is a stub in front of a module — the module goes too.
+sudo rm -f /usr/share/wayland-sessions/sol.desktop \
+           /usr/share/xdg-desktop-portal/sol-portals.conf \
+           /etc/systemd/user/sol-session.target
 sudo rm -rf /usr/local/lib/sol
 
 # The boot hook, if install.sh was asked for one. The autologin drop-in goes

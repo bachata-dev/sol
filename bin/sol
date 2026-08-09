@@ -38,6 +38,7 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol homes                    which app lives on which planet
   sol tour                     a narrated first flight; touch anything to stop
   sol setup [--force]          install the config into your home directory
+  sol session-ready            start graphical-session.target (from autostart)
   sol doctor                   is this machine set up right? paste me in bug reports
   sol list                     what is where
   sol here [--waybar]          where am I?
@@ -91,7 +92,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -3915,6 +3916,66 @@ def cmd_menu(args):
         sys.exit("sol menu: sol-menu is not installed")
 
 
+def cmd_session_ready(args):
+    """Tell the rest of the system that a desktop session has started.
+
+    A Wayland session is not finished when the compositor is drawing. Half of
+    what makes a desktop behave like one lives in user services that are
+    supposed to start with the session and stop with it — the portal that
+    answers "share my screen", the notification daemon, an agent that holds
+    your keys — and they are wired to `graphical-session.target`, which
+    nothing here was starting. The symptom is never an error message. It is
+    a browser whose screen-share list is empty, and a keyring that asks for a
+    password that used to be remembered.
+
+    Two steps, and they are separate on purpose. `import-environment` tells
+    systemd's user manager which display this session is; the dbus call tells
+    services activated by dbus rather than by systemd the same thing. A
+    service started before either knows the answer connects to no compositor
+    at all, which is why this runs from driftwm's autostart rather than from
+    the session script: by the time autostart runs, there is a socket to name.
+    """
+    import subprocess
+    keep = ["WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE",
+            "XDG_SESSION_DESKTOP", "DISPLAY"]
+    have = [k for k in keep if os.environ.get(k)]
+
+    def run(*argv):
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+            return r.returncode == 0, (r.stderr or r.stdout).strip()
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            return False, str(e)     # no systemd --user is a way to live too
+
+    run("systemctl", "--user", "import-environment", *have)
+    # ...and then say which desktop this is, rather than importing whatever
+    # was inherited. driftwm sets XDG_CURRENT_DESKTOP=driftwm for the
+    # processes it spawns, so importing gave the session manager the name of
+    # the compositor instead of the name of the desktop — and a portal looks
+    # up its backend by exactly that string. It was reading `driftwm`, finding
+    # no driftwm-portals.conf, and picking a backend at random, while the
+    # process environment said `sol:driftwm` and everything looked correct.
+    #
+    # Colon-separated because that is what the specification says and what
+    # portals split on: `sol` first, so sol-portals.conf wins, and `driftwm`
+    # behind it for anything that knows the compositor by name.
+    desktop = "sol:driftwm"
+    run("systemctl", "--user", "set-environment",
+        "XDG_CURRENT_DESKTOP=" + desktop)
+    run("dbus-update-activation-environment", "--systemd", *have)
+    run("dbus-update-activation-environment", "--systemd",
+        "XDG_CURRENT_DESKTOP=" + desktop)
+    # `sol-session.target`, not `graphical-session.target`. The latter refuses
+    # to be started by hand — it may only be pulled up by something that
+    # depends on it — and the first version of this asked for it directly,
+    # got "Operation refused", threw the error away and reported success. The
+    # session looked fine and every service wired to it stayed down.
+    ok, why = run("systemctl", "--user", "start", "sol-session.target")
+    if not ok:
+        shrug("starting sol-session.target", why or "systemctl said no")
+    say("session ready · %s" % (", ".join(have) if have else "no display named"))
+
+
 def cmd_setup(args):
     """Put sol's config into your home directory. The half a package cannot.
 
@@ -3998,6 +4059,63 @@ def cmd_doctor(args):
     except SystemExit:
         row(BAD, "driftwm is not running (no IPC socket) — start it, then run this again")
         st = {}
+
+    # Can this machine offer sol at all? Everything above is about a session
+    # that is already running; this is about being able to choose one. A
+    # desktop nobody can pick from a login screen is a desktop you have to
+    # know a trick to reach.
+    session = "/usr/share/wayland-sessions/sol.desktop"
+    if os.path.exists(session):
+        row(OK, "sol is offered by the login screen")
+    else:
+        row(WARN, "no %s — sol cannot be picked from a login screen; it is "
+                  "installed by the package and by install.sh" % session)
+    portal = "/usr/share/xdg-desktop-portal/sol-portals.conf"
+    # Asked of the session manager, not of this shell. A portal is activated
+    # by dbus and inherits the activation environment, so the only
+    # XDG_CURRENT_DESKTOP that decides anything is the one systemd is holding
+    # — which is not necessarily the one in front of us, and when they
+    # disagreed the process environment was the one that looked right.
+    seen = os.environ.get("XDG_CURRENT_DESKTOP", "")
+    try:
+        import subprocess as _sp
+        env = _sp.run(["systemctl", "--user", "show-environment"],
+                      capture_output=True, text=True, timeout=8).stdout
+        for line in env.splitlines():
+            if line.startswith("XDG_CURRENT_DESKTOP="):
+                seen = line.partition("=")[2]
+    except (OSError, ValueError, Exception):
+        pass
+    if not os.path.exists(portal):
+        row(WARN, "no %s — screen sharing and file dialogs will pick a "
+                  "backend at random or none" % portal)
+    elif seen and "sol" not in seen.lower():
+        row(WARN, "the session says XDG_CURRENT_DESKTOP=%s, so %s is not the "
+                  "file portals will read — screen sharing will find no "
+                  "backend. `sol session-ready` sets it."
+                  % (seen, os.path.basename(portal)))
+    else:
+        row(OK, "portals are told which backend to use (%s)" % (seen or "sol"))
+    try:
+        import subprocess as _sp
+        active = _sp.run(["systemctl", "--user", "is-active",
+                          "graphical-session.target"], capture_output=True,
+                         text=True, timeout=8).stdout.strip()
+        unit = os.path.exists("/usr/lib/systemd/user/sol-session.target") \
+            or os.path.exists("/etc/systemd/user/sol-session.target")
+        if not unit:
+            row(WARN, "no sol-session.target unit — `sol session-ready` has "
+                      "nothing to start, and graphical-session.target refuses "
+                      "to be started directly")
+        if active == "active":
+            row(OK, "graphical-session.target is up — user services can run")
+        elif d is not None:
+            row(WARN, "graphical-session.target is %s: services wired to a "
+                      "desktop session (portals, notifications, keyring) will "
+                      "not start. `sol session-ready` starts it, and belongs "
+                      "in autostart." % (active or "unknown"))
+    except (OSError, ValueError, _sp.SubprocessError):
+        pass                       # no systemd --user is a valid way to live
 
     cfg = os.path.expanduser("~/.config/driftwm/config.toml")
     if os.path.exists(cfg):
@@ -4651,6 +4769,7 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
         "focus": cmd_focus, "solo": cmd_solo, "present": cmd_present,
         "mode": cmd_mode, "pick": cmd_pick, "setup": cmd_setup,
+        "session-ready": cmd_session_ready,
         "night": cmd_night, "dark": cmd_dark,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}

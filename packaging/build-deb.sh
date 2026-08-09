@@ -33,7 +33,8 @@ PKG="sol_${VERSION}_all.deb"
 
 install -d "$ROOT/DEBIAN" "$ROOT/usr/bin" "$ROOT/usr/lib/sol" \
            "$ROOT/usr/share/sol/config" "$ROOT/usr/share/sol/tools" \
-           "$ROOT/usr/share/doc/sol"
+           "$ROOT/usr/share/doc/sol" "$ROOT/usr/share/wayland-sessions" \
+           "$ROOT/usr/share/xdg-desktop-portal" "$ROOT/usr/lib/systemd/user"
 
 # The code, and the seven-line doorway in front of it. See install.sh for why
 # it is imported rather than run: Python caches bytecode for what it imports
@@ -59,9 +60,25 @@ install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
               bin/sol-session bin/sol-planetarium bin/sol-spin \
               bin/driftwm-up bin/driftwm-background-next "$ROOT/usr/bin/"
 
+# The two files that are the machine's business rather than a person's, and
+# so belong to the package: the session a login screen offers, and the portal
+# backends that session uses. Both are keyed to XDG_CURRENT_DESKTOP, which is
+# why they are named for it and not for the compositor underneath.
+install -m644 config/sol.desktop "$ROOT/usr/share/wayland-sessions/sol.desktop"
+install -m644 config/sol-portals.conf \
+              "$ROOT/usr/share/xdg-desktop-portal/sol-portals.conf"
+# The handle `sol session-ready` pulls: graphical-session.target refuses to be
+# started by hand, so something has to depend on it, and this is that thing.
+install -m644 config/sol-session.target \
+              "$ROOT/usr/lib/systemd/user/sol-session.target"
+
 # The config template. Not installed into anyone's home directory — `sol
 # setup` does that, when the person it belongs to asks for it.
 install -m644 config/* "$ROOT/usr/share/sol/config/"
+# ...and not those two again, which are not yours to edit per-user.
+rm -f "$ROOT/usr/share/sol/config/sol.desktop" \
+      "$ROOT/usr/share/sol/config/sol-portals.conf" \
+      "$ROOT/usr/share/sol/config/sol-session.target"
 chmod 755 "$ROOT/usr/share/sol/config/label.sh"
 install -m755 tools/acceptance.py tools/sol-hand.py tools/sol-positions.py \
               "$ROOT/usr/share/sol/tools/"

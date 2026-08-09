@@ -1,3 +1,19 @@
+sol (1.1.0) unstable; urgency=medium
+
+  * sol is a desktop you can choose. A wayland-session entry puts it in the
+    login screen beside every other desktop on the machine, so switching to
+    sol and back is picking a different session rather than booting specially.
+  * graphical-session.target is started, through a sol-session.target that
+    depends on it — portals, notification daemons and keyring agents are
+    wired to that target and were never starting.
+  * Portals are told which backend this desktop uses, and told under the
+    right name: the value that decides is the one the session manager holds,
+    and driftwm sets its own for the processes it spawns.
+  * sol doctor reports all three, and reports the desktop name portals will
+    actually read rather than the one in the caller's environment.
+
+ -- sol <noreply@github.com>  Sun, 09 Aug 2026 20:00:00 +0000
+
 sol (1.0.1) unstable; urgency=medium
 
   * focus: ask the windows, not only the screen. A client declares a minimum
