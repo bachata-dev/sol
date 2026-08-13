@@ -91,6 +91,14 @@ sudo install -d /usr/share/wayland-sessions /usr/share/xdg-desktop-portal
 sudo install -m644 config/sol.desktop /usr/share/wayland-sessions/sol.desktop
 sudo install -m644 config/sol-portals.conf \
                    /usr/share/xdg-desktop-portal/sol-portals.conf
+# The conf names backends; the backends have to exist. Without them the
+# symptom is not an error — it is a file dialog that never opens and a share
+# list that is empty, which is why it is worth a warning here and a check in
+# `sol doctor`.
+for b in wlr gtk; do
+  [ -e "/usr/share/xdg-desktop-portal/portals/$b.portal" ] ||
+    warn "portal backend '$b' is not installed (xdg-desktop-portal-$b) — file dialogs and screen sharing will quietly do nothing without it"
+done
 sudo install -d /etc/systemd/user
 sudo install -m644 config/sol-session.target /etc/systemd/user/sol-session.target
 say "sol is now offered by your login screen, beside every other desktop"

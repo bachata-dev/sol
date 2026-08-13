@@ -38,6 +38,7 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol homes                    which app lives on which planet
   sol tour                     a narrated first flight; touch anything to stop
   sol setup [--force]          install the config into your home directory
+  sol session [name|pick]      which desktop this machine starts, and change it
   sol session-ready            start graphical-session.target (from autostart)
   sol doctor                   is this machine set up right? paste me in bug reports
   sol list                     what is where
@@ -92,7 +93,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -3916,6 +3917,212 @@ def cmd_menu(args):
         sys.exit("sol menu: sol-menu is not installed")
 
 
+# ── Which desktop this machine starts ─────────────────────────────────────
+# A machine with a display manager gets a session picker for free: sol ships a
+# wayland-session entry and appears in the list beside everything else. A
+# machine without one has no picker at all — which is most of sol's own
+# documented installs, where agetty autologins on the console and the profile
+# runs `sol-session`. On those, "switch to KDE" had no answer.
+#
+# It does not need a display manager to have one. Every desktop on the system
+# already describes itself in /usr/share/wayland-sessions, in a format that
+# has been standard for twenty years: a name to show and a command to run. A
+# picker is a list of those files and a saved choice.
+SESSION_DIRS = ("/usr/local/share/wayland-sessions", "/usr/share/wayland-sessions")
+SESSION_PICK = os.path.expanduser("~/.config/driftwm/session")
+PICK_WAIT = 10        # how long the picker waits before keeping what you had
+
+
+def sessions():
+    """Every desktop this machine can start: (name, title, exec, desktop names).
+
+    Read from the session files rather than from a list sol keeps, because
+    the whole point is that it knows about desktops nobody told it about —
+    install Plasma tomorrow and it is in the picker tonight.
+    """
+    import shutil
+    found, seen = [], set()
+    for where in SESSION_DIRS:
+        try:
+            names = sorted(os.listdir(where))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith(".desktop") or name in seen:
+                continue
+            seen.add(name)
+            title, run, tryexec, desktops = "", "", "", ""
+            try:
+                with open(os.path.join(where, name)) as f:
+                    for line in f:
+                        key, _, value = line.partition("=")
+                        key, value = key.strip(), value.strip()
+                        if key == "Name" and not title:
+                            title = value
+                        elif key == "Exec":
+                            run = value
+                        elif key == "TryExec":
+                            tryexec = value
+                        elif key == "DesktopNames":
+                            desktops = value
+            except OSError:
+                continue
+            # TryExec is the file's own liveness test — offer this session
+            # only while this binary exists — and honoring it is what keeps a
+            # half-uninstalled desktop out of the picker. The same rule every
+            # login screen applies.
+            if run and (not tryexec or shutil.which(tryexec)):
+                short = name[:-len(".desktop")]
+                found.append((short, title or short, run, desktops or short))
+    return found
+
+
+def chosen_session():
+    """The session name this machine is set to start. `sol` unless told."""
+    try:
+        with open(SESSION_PICK) as f:
+            name = f.read().strip()
+        return name or "sol"
+    except OSError:
+        return "sol"
+
+
+def cmd_session(args):
+    """Which desktop starts on this machine, and how to change it.
+
+        sol session                what is set, and what else is installed
+        sol session <name>         start that one next time
+        sol session exec           the line `sol-session` runs (its own use)
+        sol session pick           the console picker, shown after a logout
+
+    The choice is a name, not a command. A saved command would go stale the
+    day the desktop is upgraded and its .desktop file changes; a name is
+    looked up fresh every time, and a name that no longer exists falls back
+    to sol rather than to a black screen.
+    """
+    have = sessions()
+    what = args[0] if args else ""
+
+    if what == "exec":
+        # What sol-session evaluates. Nothing at all for sol, which that
+        # script starts natively — it has a log, a failure path and a
+        # session target to tend, none of which belong in one line of shell.
+        name = chosen_session()
+        for short, _, run, desktops in have:
+            if short == name and short != "sol":
+                # XDG_CURRENT_DESKTOP is the desktop's own names, colon
+                # separated, which is what portals and applications match on.
+                # XDG_SESSION_DESKTOP is the session file's name — a single
+                # word, and not the same word: Plasma's file is `plasma` and
+                # its desktop is `KDE`.
+                return print("XDG_CURRENT_DESKTOP=%s XDG_SESSION_DESKTOP=%s "
+                             "DESKTOP_SESSION=%s exec %s"
+                             % (shell_quote(desktops.replace(";", ":").strip(":")),
+                                shell_quote(short), shell_quote(short), run))
+        return
+
+    if what == "pick":
+        return pick_session(have)
+
+    if what:
+        entry = find_session(have, what)
+        if not entry:
+            sys.exit("sol session: no session called %r. Installed: %s"
+                     % (what, ", ".join(s[0] for s in have) or "none"))
+        save_pick(entry)
+        print("%s starts next time. Log out to change desktops." % entry[1])
+        return
+
+    now = chosen_session()
+    if not have:
+        print("no session files found in %s" % " or ".join(SESSION_DIRS))
+        return
+    for short, title, _, _ in have:
+        print("  %s %-12s %s" % ("▸" if short == now else " ", short, title))
+    print("\n  `sol session <name>` changes it; it takes effect at the next login.")
+
+
+def shell_quote(text):
+    """Enough quoting for a value going into a shell line sol wrote itself."""
+    return "'" + str(text).replace("'", "'\\''") + "'"
+
+
+def find_session(have, what):
+    """The session `what` names: the exact short name first, else a substring
+    of the name or the title, so `plas` finds Plasma without anyone knowing
+    its file is called `plasma`."""
+    match = [s for s in have if s[0] == what] \
+        or [s for s in have if what.lower() in s[0].lower()] \
+        or [s for s in have if what.lower() in s[1].lower()]
+    return match[0] if match else None
+
+
+def save_pick(entry):
+    """Write the chosen session's name down for the next login."""
+    try:
+        os.makedirs(os.path.dirname(SESSION_PICK), exist_ok=True)
+        with open(SESSION_PICK, "w") as f:
+            f.write(entry[0] + "\n")
+    except OSError as e:
+        sys.exit("sol session: could not save the choice (%s)" % e)
+
+
+def pick_session(have=None):
+    """The console picker, shown after a clean logout.
+
+    What a login screen would offer, for the machines that have not got one —
+    which is every machine sol's own install instructions produce. Numbered
+    rather than typed, because it is read on a console by someone who has
+    just logged out and wants one keystroke.
+
+    Exit 2 — the same answer as `c` — when there is no one to ask or nothing
+    to choose between: run without a terminal, or with one lone session
+    installed, a logout should stay a logout. Returning success here once
+    made sol-session restart the session instead, which under a display
+    manager turned every logout into the same desktop again, and on a
+    machine with only sol made logging out impossible.
+    """
+    have = sessions() if have is None else have
+    if not sys.stdin.isatty() or len(have) < 2:
+        raise SystemExit(2)
+    now = chosen_session()
+    print("\n  Which desktop?\n")
+    for i, (short, title, _, _) in enumerate(have, 1):
+        print("    %d) %-24s %s" % (i, title, "· current" if short == now else ""))
+    print("    c) a console prompt\n")
+    # Timed, and the timeout keeps what you already had. A picker that waits
+    # for ever is a machine that logged itself out and stopped — fine when
+    # you are sitting in front of it, and not fine when the session ended
+    # while you were not. Doing nothing is the answer most logouts want.
+    import select
+    sys.stdout.write("  [%s, %ds] " % (now, PICK_WAIT))
+    sys.stdout.flush()
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], PICK_WAIT)
+        if not ready:
+            print("\n")
+            return
+        answer = sys.stdin.readline().strip().lower()
+    except (EOFError, KeyboardInterrupt, OSError, ValueError):
+        print()
+        return
+    if answer in ("c", "console", "q", "quit"):
+        raise SystemExit(2)                  # sol-session reads this as "stop"
+    if not answer:
+        return
+    entry = have[int(answer) - 1] if answer.isdigit() \
+        and 1 <= int(answer) <= len(have) else find_session(have, answer)
+    if entry:
+        save_pick(entry)
+        print("  %s, coming up." % entry[1])
+        return
+    # A typo is not a decision. Handing the raw answer to cmd_session used to
+    # end in sys.exit, and from here a non-zero exit ends the login — so one
+    # mistyped word was a logout. Keeping what you had is what every other
+    # prompt on a timeout or a shrug does, and the picker returns next logout.
+    print("  no session called %r — keeping %s" % (answer, now))
+
+
 def cmd_session_ready(args):
     """Tell the rest of the system that a desktop session has started.
 
@@ -4064,6 +4271,49 @@ def cmd_doctor(args):
     # that is already running; this is about being able to choose one. A
     # desktop nobody can pick from a login screen is a desktop you have to
     # know a trick to reach.
+    # The trap that cost a working machine an evening: a display manager
+    # enabled on a box with no X server, defaulting to an X11 greeter. It
+    # autologs you in once and looks perfect, and the first time a session
+    # *ends* the greeter cannot start and the screen goes black — with no way
+    # back, because rebooting hits the same wall.
+    dm = ""
+    for unit in ("sddm", "gdm3", "gdm", "lightdm", "greetd"):
+        try:
+            if subprocess.run(["systemctl", "is-enabled", unit],
+                              capture_output=True, text=True,
+                              timeout=8).stdout.strip() == "enabled":
+                dm = unit
+                break
+        except (OSError, subprocess.SubprocessError):
+            break                # no systemctl is no display manager either
+    if dm:
+        x11 = os.path.exists("/usr/bin/X") or os.path.exists("/usr/bin/Xorg")
+        # sddm and lightdm greet on X11 unless told otherwise. gdm and greetd
+        # greet on Wayland by default, so a missing X server is their normal
+        # and not a trap.
+        wants_x = dm in ("sddm", "lightdm")
+        conf = ""
+        for where in ("/etc/sddm.conf", "/etc/sddm.conf.d"):
+            try:
+                if os.path.isdir(where):
+                    for f in sorted(os.listdir(where)):
+                        conf += open(os.path.join(where, f)).read()
+                elif os.path.exists(where):
+                    conf += open(where).read()
+            except OSError:
+                pass
+        wayland_greeter = "DisplayServer=wayland" in conf.replace(" ", "")
+        if wants_x and not x11 and not wayland_greeter:
+            row(BAD, "%s is enabled but there is no X server and its greeter "
+                     "is not set to Wayland — it will log you in once and show "
+                     "a black screen the first time you log out. Install "
+                     "xserver-xorg-core, or set DisplayServer=wayland." % dm)
+        else:
+            row(OK, "%s is your login screen" % dm)
+    else:
+        row(OK, "no display manager — `sol session` picks the desktop, and "
+                "offers the choice again when you log out")
+
     session = "/usr/share/wayland-sessions/sol.desktop"
     if os.path.exists(session):
         row(OK, "sol is offered by the login screen")
@@ -4078,13 +4328,12 @@ def cmd_doctor(args):
     # disagreed the process environment was the one that looked right.
     seen = os.environ.get("XDG_CURRENT_DESKTOP", "")
     try:
-        import subprocess as _sp
-        env = _sp.run(["systemctl", "--user", "show-environment"],
-                      capture_output=True, text=True, timeout=8).stdout
+        env = subprocess.run(["systemctl", "--user", "show-environment"],
+                             capture_output=True, text=True, timeout=8).stdout
         for line in env.splitlines():
             if line.startswith("XDG_CURRENT_DESKTOP="):
                 seen = line.partition("=")[2]
-    except (OSError, ValueError, Exception):
+    except (OSError, subprocess.SubprocessError):
         pass
     if not os.path.exists(portal):
         row(WARN, "no %s — screen sharing and file dialogs will pick a "
@@ -4096,6 +4345,34 @@ def cmd_doctor(args):
                   % (seen, os.path.basename(portal)))
     else:
         row(OK, "portals are told which backend to use (%s)" % (seen or "sol"))
+    # A conf that names backends is only half of it — the backend has to be
+    # installed, and when it is not the symptom is identical to having no
+    # conf at all: dialogs that never appear, an empty share list, no error
+    # anywhere. This check is what found a machine with the conf in place
+    # and only wlr on disk. A backend registers itself as
+    # /usr/share/xdg-desktop-portal/portals/<name>.portal, so the question
+    # "is it installed" has a filename for an answer.
+    if os.path.exists(portal):
+        want = set()
+        try:
+            with open(portal) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(("#", "[")) or "=" not in line:
+                        continue
+                    want.update(p.strip() for p in
+                                line.partition("=")[2].split(";")
+                                if p.strip() and p.strip() != "*")
+        except OSError:
+            pass
+        gone = [b for b in sorted(want) if not os.path.exists(
+                "/usr/share/xdg-desktop-portal/portals/%s.portal" % b)]
+        if gone:
+            row(BAD, "sol-portals.conf names portal backends that are not "
+                     "installed: %s — file dialogs and screen sharing will "
+                     "quietly do nothing. apt install %s"
+                     % (", ".join(gone),
+                        " ".join("xdg-desktop-portal-" + b for b in gone)))
     try:
         import subprocess as _sp
         active = _sp.run(["systemctl", "--user", "is-active",
@@ -4116,6 +4393,31 @@ def cmd_doctor(args):
                       "in autostart." % (active or "unknown"))
     except (OSError, ValueError, _sp.SubprocessError):
         pass                       # no systemd --user is a valid way to live
+
+    # The extra header. Debian enables a package's user units on install, and
+    # a unit wanted by graphical-session.target starts in EVERY desktop's
+    # session — an enabled waybar.service drew a second bar over sol and over
+    # Plasma alike, and an enabled mako.service races the mako sol starts
+    # itself, so one of them dies with "a notification daemon is already
+    # running". sol starts both from driftwm's autostart, with its own
+    # configs, which makes the units pure duplicates here. Masking rather
+    # than disabling, because the enablement symlink lives in /etc where a
+    # user cannot delete it — a mask in ~/.config outranks it and needs no
+    # root.
+    for unit in ("waybar.service", "mako.service"):
+        try:
+            state = subprocess.run(["systemctl", "--user", "is-enabled",
+                                    unit], capture_output=True, text=True,
+                                   timeout=8).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            break
+        if state == "enabled":
+            row(BAD, "%s is enabled and wired to graphical-session.target — "
+                     "every desktop on this machine gets a second %s. sol "
+                     "starts its own; `systemctl --user mask %s`"
+                     % (unit,
+                        "bar" if unit.startswith("waybar")
+                        else "notification daemon", unit))
 
     cfg = os.path.expanduser("~/.config/driftwm/config.toml")
     if os.path.exists(cfg):
@@ -4769,7 +5071,7 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
         "focus": cmd_focus, "solo": cmd_solo, "present": cmd_present,
         "mode": cmd_mode, "pick": cmd_pick, "setup": cmd_setup,
-        "session-ready": cmd_session_ready,
+        "session-ready": cmd_session_ready, "session": cmd_session,
         "night": cmd_night, "dark": cmd_dark,
         "shift": lambda a: cmd_shift(a, -1 if a and a[0].startswith("b") else 1),
         "next": lambda a: cmd_step(a, 1), "prev": lambda a: cmd_step(a, -1)}

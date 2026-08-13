@@ -32,39 +32,173 @@ export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-sol:driftwm}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-sol}"
 
-command -v driftwm > /dev/null || {
-  echo "sol-session: driftwm is not installed — see https://github.com/malbiruk/driftwm" >&2
-  exit 1
+# ── one login, as many sessions as you care to try ────────────────────────
+# A machine with a display manager gets a session picker for free. A machine
+# without one — which is what sol's own install instructions produce — had no
+# way to start anything but sol, and no way to get back to the desktop it
+# replaced. So, on a console, this starts whichever session is chosen and
+# offers the choice again after a clean logout: the job a greeter does, done
+# by the thing that was already here, with no X server and no display
+# manager to go wrong.
+#
+# Only on a console. Launched from a display manager there is no terminal to
+# ask on and no business asking — the greeter is the picker, and it already
+# asked. Honoring ~/.config/driftwm/session here would start Plasma inside a
+# session the greeter and logind both believe is sol. So the display-manager
+# path runs driftwm once, and a logout is a logout: back to the greeter.
+if [ -t 0 ]; then CONSOLE=yes; else CONSOLE=no; fi
+
+# The guard is the exit code, and it is the same rule as before. A session
+# that ends cleanly is somebody logging out, and the picker is the right
+# answer. A session that *fails* is a missing GPU or a bad connector name,
+# and starting it again is a boot loop that cannot be told anything — so that
+# still falls through to the console prompt with the tail of the log. STARTS
+# bounds the other way: a session that exits 0 as soon as it stands up, over
+# and over, is not a person logging out, and five in a row is enough to stop
+# and say so. Only quick deaths count — a day of work followed by a logout
+# resets it, so five real logouts in one login can never be mistaken for a
+# spin.
+STARTS=0
+
+# Run one session, and make sure it is really over before returning.
+#
+# A compositor's children outlive it. Not by accident — a bar, a notification
+# daemon, sol's own watcher are all spawned by the session and none of them
+# are waited on — but the consequence is that "the session command exited"
+# and "the session ended" are different moments, and while any leftover still
+# holds the DRM device the next compositor cannot take the seat. Measured,
+# not guessed: leaving Plasma left kwin_wayland running, driftwm could not
+# start behind it, and the screen sat on a desktop that had been logged out
+# of. sol leaks the same way — waybar was still running inside that KDE
+# session.
+#
+# A scope, not a process group. The obvious version of this — background the
+# session with `set -m` so it lands in its own process group, then signal the
+# group — is wrong in a way that only shows up when it matters: /bin/sh here
+# is dash, its job control does not do what bash's does, and the job stays in
+# the script's own process group. `kill -TERM -$!` then kills the session
+# script along with the session. Logging out left a bash prompt on the
+# console and a half-dead desktop still drawing, which is a worse failure
+# than the leak it was written to fix.
+#
+# A transient systemd scope has none of that ambiguity about what the
+# session *spawned*: everything forked from the session command lands in one
+# cgroup whatever it does with setsid, this script sits outside the scope so
+# it cannot be caught by its own cleanup, and stopping the unit ends all of
+# it. What a scope cannot see is work the session handed to the user manager
+# — Plasma runs kwin and its shell as user services, in units of their own —
+# which is why the loop below also stops graphical-session.target after
+# every session: the one handle all of those are wired to, whoever started
+# them. Where there is no user manager to ask, the fallback runs the session
+# plainly and leaks rather than guesses — a bar left drawing is a nuisance,
+# and killing your login shell is not.
+#
+# Whether a scope can be had is settled by making one, once, rather than by
+# asking systemd how it feels. The obvious probe — `systemctl --user
+# is-system-running` — exits non-zero on a perfectly working manager that
+# merely has a failed unit somewhere, reports "degraded", and would send
+# every session down the fallback path for a reason that has nothing to do
+# with scopes. Running `true` in a scope answers the actual question.
+SCOPE=no
+if command -v systemd-run > /dev/null 2>&1 &&
+   systemd-run --user --quiet --collect --scope --unit="sol-probe-$$" \
+       true > /dev/null 2>&1; then
+  SCOPE=yes
+fi
+
+run_session() {
+  if [ "$SCOPE" = yes ]; then
+    unit="sol-session-$$"
+    systemd-run --user --quiet --collect --scope --unit="$unit" \
+        sh -c "$1" > "$LOG" 2>&1
+    code=$?
+    systemctl --user stop "$unit.scope" > /dev/null 2>&1 || true
+  else
+    sh -c "$1" > "$LOG" 2>&1
+    code=$?
+  fi
+  # A breath for the compositor's own teardown — dropping DRM master and
+  # releasing the tty are not instant, and the next session starting into a
+  # seat that is still held fails in a way that looks like sol being broken.
+  sleep 1
+  return "$code"
 }
 
-# The universe self-assembles from driftwm's autostart; everything sol adds to
-# it lives in ~/.config/driftwm/config.toml.
-driftwm > "$LOG" 2>&1
-code=$?
+while :; do
+  # Another desktop, if one was chosen — console logins only: a display
+  # manager already asked, and its answer is the session file it ran.
+  # `sol session exec` prints a line that sets that desktop's own
+  # XDG_CURRENT_DESKTOP and execs it — read fresh from its .desktop file
+  # every time, so an upgrade that moves the binary cannot leave a saved
+  # command pointing at nothing.
+  OTHER=""
+  if [ "$CONSOLE" = yes ]; then
+    OTHER=$(sol session exec 2>/dev/null || true)
+  fi
+  BEGAN=$(date +%s)
+  if [ -n "$OTHER" ]; then
+    run_session "$OTHER"
+    code=$?
+  else
+    # The universe self-assembles from driftwm's autostart; everything sol
+    # adds to it lives in ~/.config/driftwm/config.toml. driftwm is checked
+    # here rather than at the door, because a machine whose chosen session
+    # is another desktop can live without it — and used to be refused entry.
+    command -v driftwm > /dev/null || {
+      echo "sol-session: driftwm is not installed — see https://github.com/malbiruk/driftwm" >&2
+      code=1
+      break
+    }
+    run_session "exec driftwm"
+    code=$?
+  fi
+  LIVED=$(( $(date +%s) - BEGAN ))
 
-# Take the session down with it. `sol session-ready` starts
-# sol-session.target from driftwm's autostart, and a target that is
-# started and never stopped leaves the portal and the notification daemon
-# running against a compositor that has exited — which matters most in the
-# case this whole file exists for, logging out and back in, where the second
-# session inherits the first one's ghosts. Stopping it is also what tells
-# those services to shut down cleanly rather than be killed with the scope.
-systemctl --user stop sol-session.target > /dev/null 2>&1 || true
-systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
-    XDG_SESSION_TYPE XDG_SESSION_DESKTOP > /dev/null 2>&1 || true
+  # Take the session down with it. `sol session-ready` starts
+  # sol-session.target from driftwm's autostart, and a target that is started
+  # and never stopped leaves the portal and the notification daemon running
+  # against a compositor that has exited — which matters most here, logging
+  # out and back in, where the second session inherits the first one's
+  # ghosts. graphical-session.target too, and not only because stopping it
+  # takes sol-session.target down with it: it is the handle everything a
+  # desktop parks in the user manager is wired to. Plasma's kwin and shell
+  # run as user services outside our scope, and after an unclean end they
+  # are what keeps the seat held against the next compositor. Stopping the
+  # target is also what tells all of them to shut down cleanly rather than
+  # be killed with the scope.
+  systemctl --user stop graphical-session.target sol-session.target \
+      > /dev/null 2>&1 || true
+  systemctl --user unset-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP \
+      XDG_SESSION_TYPE XDG_SESSION_DESKTOP > /dev/null 2>&1 || true
 
-# Deliberately not `exec`, and deliberately not a loop. A compositor that dies
-# on startup — a missing GPU, a config typo, a bad connector name — would
-# otherwise take the console straight back to autologin and try again forever,
-# and a machine in a boot loop cannot be told anything. Falling back to the
-# login shell you came from means the next thing you see is a prompt that can
-# explain itself, on the console, without another machine to ssh in from.
-if [ "$code" -ne 0 ]; then
-  echo >&2
-  echo "sol: driftwm exited $code. The end of $LOG:" >&2
-  tail -n 20 "$LOG" >&2
-  echo >&2
-  echo "sol: 'sol doctor' explains most of it. 'sol-session' tries again." >&2
-fi
+  if [ "$code" -ne 0 ]; then
+    echo >&2
+    echo "sol: the session exited $code. The end of $LOG:" >&2
+    tail -n 20 "$LOG" >&2
+    echo >&2
+    echo "sol: 'sol doctor' explains most of it. 'sol-session' tries again." >&2
+    break
+  fi
+
+  # Only a session that died as soon as it stood up counts toward the spin
+  # guard. A clean exit after real use is somebody logging out, however many
+  # times they do it in one login.
+  if [ "$LIVED" -lt 15 ]; then
+    STARTS=$((STARTS + 1))
+  else
+    STARTS=0
+  fi
+  if [ "$STARTS" -ge 5 ]; then
+    echo "sol: five sessions in a row ended within seconds of starting." >&2
+    echo "sol: Stopping here rather than spinning. 'sol doctor', then 'sol-session'." >&2
+    break
+  fi
+
+  # A clean exit is somebody logging out. On a console, ask what they want
+  # next; `c` at the picker — or a display manager behind us, or nothing to
+  # choose between — ends the login instead.
+  [ "$CONSOLE" = yes ] || break
+  sol session pick || break
+done
 
 exit "$code"

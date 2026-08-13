@@ -1,3 +1,27 @@
+sol (1.2.0) unstable; urgency=medium
+
+  * `sol session`: which desktop this machine starts, and a console picker
+    at logout for machines without a display manager — the job of a greeter,
+    done by the console you were already on. Sessions run in a transient
+    systemd scope, and graphical-session.target is stopped after each one,
+    so a session that ends is really over, whoever started its pieces.
+  * Living beside KDE: sol doctor now names user units enabled into
+    graphical-session.target that duplicate sol's own bar and notifier —
+    the "extra header" every desktop was getting — and portal backends the
+    conf names but the machine lacks. The package Recommends
+    xdg-desktop-portal-wlr and -gtk, and install.sh warns when they are
+    missing.
+  * A logout stays a logout: the picker ends the login rather than
+    restarting the desktop when it has no terminal to ask on or nothing to
+    choose between, a typo at it keeps what you had, the spin guard counts
+    only sessions that die within seconds of starting, and a saved pick no
+    longer applies under a display manager, which already asked.
+  * Session entries honor TryExec, so a half-uninstalled desktop leaves the
+    picker; gdm is no longer accused of needing an X server its greeter
+    does not want; driftwm is required only by the sessions that run it.
+
+ -- sol <noreply@github.com>  Fri, 14 Aug 2026 02:30:00 +0000
+
 sol (1.1.0) unstable; urgency=medium
 
   * sol is a desktop you can choose. A wayland-session entry puts it in the

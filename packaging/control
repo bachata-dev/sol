@@ -5,7 +5,7 @@ Priority: optional
 Architecture: all
 Maintainer: sol <noreply@github.com>
 Depends: python3 (>= 3.8), foot, mawk | gawk | original-awk
-Recommends: python3-gi, gir1.2-gtk-3.0, libgtk-layer-shell0, waybar, fuzzel, mako, fonts-jetbrains-mono
+Recommends: python3-gi, gir1.2-gtk-3.0, libgtk-layer-shell0, waybar, fuzzel, mako, fonts-jetbrains-mono, xdg-desktop-portal-wlr, xdg-desktop-portal-gtk
 Homepage: https://github.com/bachata-dev/sol
 Description: your desktop is the solar system, for driftwm
  sol turns driftwm's infinite canvas into a place you already know: the Sun at
