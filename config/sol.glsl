@@ -61,15 +61,19 @@ const vec2 R6 = vec2(-0.04322, -0.99907);
 const vec2 R7 = vec2(-0.98789, -0.15518);
 const vec2 R8 = vec2( 0.70869, -0.70552);
 
+// These colours are the navigation. Each planet keeps a hue of its own wide
+// enough from its neighbours in the palette to tell apart from across the
+// system: Venus sits in bronze so Saturn can keep the pale straw, and
+// Neptune in indigo so Earth can keep the azure.
 const vec3 C0 = vec3(0.941, 0.851, 0.604);   // the Sun, for its own district
 const vec3 C1 = vec3(0.604, 0.647, 0.808);
-const vec3 C2 = vec3(0.878, 0.686, 0.408);
+const vec3 C2 = vec3(0.816, 0.545, 0.243);   // Venus, bronze
 const vec3 C3 = vec3(0.478, 0.635, 0.969);
 const vec3 C4 = vec3(0.969, 0.463, 0.557);
 const vec3 C5 = vec3(1.000, 0.620, 0.392);
 const vec3 C6 = vec3(0.902, 0.812, 0.631);
 const vec3 C7 = vec3(0.490, 0.812, 1.000);
-const vec3 C8 = vec3(0.353, 0.498, 0.816);
+const vec3 C8 = vec3(0.455, 0.467, 0.878);   // Neptune, indigo
 
 const float BELT_R = 3870.0;
 const float SUN_R  = 502.0;   // 109 Earth radii, on the same cube-root rule
@@ -162,9 +166,15 @@ float orbit_line(float dist, float px) {
 // inner system every pixel used to evaluate Neptune's orbit to prove it was
 // nowhere near it.
 float ring(vec2 c, vec4 o, vec2 rot, float px) {
-    float r = length(c - o.xy);
+    // Squared distances, because this rejection runs eight times for every
+    // pixel on the screen and the GPU this has to be fast on is the one
+    // where a square root still costs something.
+    vec2 d = c - o.xy;
+    float r2 = dot(d, d);
     float reach = px * 40.0;
-    if (r < min(o.z, o.w) - reach || r > max(o.z, o.w) + reach) return 0.0;
+    float lo = max(min(o.z, o.w) - reach, 0.0);
+    float hi = max(o.z, o.w) + reach;
+    if (r2 < lo * lo || r2 > hi * hi) return 0.0;
     return orbit_line(orbit_dist(c, o, rot), px);
 }
 
@@ -192,8 +202,9 @@ float face(vec2 d, float rad, float band, float mottle) {
 vec3 planet(vec2 c, vec2 p, float rad, vec3 tint, float bloom,
             float band, float mottle) {
     vec2 d = c - p;
-    float r = length(d);
-    if (r > rad * 4.0) return vec3(0.0);
+    float r2 = dot(d, d);
+    if (r2 > rad * rad * 16.0) return vec3(0.0);   // squared: no sqrt to say no
+    float r = sqrt(r2);
     float disc = 1.0 - smoothstep(rad - 2.0, rad + 2.0, r);
     vec2 sunward = normalize(-p);                       // the Sun is at the origin
     float lit = 0.18 + 0.82 * clamp(dot(d / max(rad, 1.0), sunward) * 0.5 + 0.62, 0.0, 1.0);
@@ -215,7 +226,7 @@ vec3 halo(vec2 c, vec2 p, vec3 tint, float uf, float amt) {
     // background is dominated by drawing 4K at all, not by this arithmetic.
     vec2 d = c - p;
     float dd = dot(d, d);
-    if (dd > 12.25 * POOL_R * POOL_R) return vec3(0.0);        // (3.5 sigma)^2
+    if (dd > 9.0 * POOL_R * POOL_R) return vec3(0.0);          // (3 sigma)^2
     return tint * exp(-dd / (2.0 * POOL_R * POOL_R)) * uf * amt;
 }
 
@@ -235,7 +246,7 @@ float rrect(vec2 p, vec2 ext, float rad) {
 // the camera position is stateful truth the shader already receives, and
 // "the lights are on where you are" is how a district reads as the room
 // you are in rather than one more rectangle in the dark.
-vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here, float rad) {
+vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here, float rad, float px) {
     if (d.z < 1.0) return vec3(0.0);
     // Rounded like the world it belongs to. The radius is the margin the card
     // stands clear of its windows by (CARD_PAD, 70) plus the window's own
@@ -244,9 +255,22 @@ vec3 card(vec2 c, vec4 d, vec3 tint, float uf, float here, float rad) {
     // narrows as the window corner comes down. Clamped to the box, because a
     // corner larger than the rectangle it is rounding turns it inside out.
     float s = rrect(c - d.xy, d.zw, min(rad, min(d.z, d.w)));
+    // Past this reach every term below is under a thousandth of a channel —
+    // cheaper to say so once than to prove it with three exponentials,
+    // nine times for every pixel on the screen.
+    if (s > 250.0) return vec3(0.0);
     float fill = 1.0 - smoothstep(-3.0, 3.0, s);
+    // The edge is two things at two distances. Up close, a hairline held in
+    // screen pixels — the same rule the orbit lines live by — so a card reads
+    // as a drawn boundary rather than a haze. Pulled back, the hairline is
+    // still there but the wide rim takes over, and the district becomes a
+    // pool of its own light.
+    float line = exp(-abs(s) / (px * 1.2));
     float rim  = exp(-abs(s) / 34.0);
-    return tint * (fill * 0.05 + rim * 0.14) * (0.40 + 0.60 * uf) * (1.0 + here * 0.9);
+    return tint * (fill * 0.05 * (0.40 + 0.60 * uf)
+                 + line * (0.11 + 0.07 * uf)
+                 + rim  * 0.14 * (0.15 + 0.85 * uf))
+                * (1.0 + here * 0.9);
 }
 
 // Is a point inside a district's rectangle? 1.0 or 0.0.
@@ -274,8 +298,13 @@ void main() {
     vec2 mw = screen + u_camera * 0.03;
     float d_mw = dot(mw, vec2(-0.868, 0.496));
     float band_mw = exp(-d_mw * d_mw / (2.0 * 900.0 * 900.0));
-    float wisp = noise(mw * 0.0016) * 0.65 + noise(mw * 0.004) * 0.35;
-    col += vec3(0.72, 0.76, 0.92) * band_mw * (0.20 + 0.55 * wisp) * 0.045;
+    // The wisps are two octaves of noise, and most of the screen is nowhere
+    // near the band that shows them: below this the whole term is under a
+    // thousandth, so the noise is not worth computing.
+    if (band_mw > 0.02) {
+        float wisp = noise(mw * 0.0016) * 0.65 + noise(mw * 0.004) * 0.35;
+        col += vec3(0.72, 0.76, 0.92) * band_mw * (0.20 + 0.55 * wisp) * 0.045;
+    }
 
     // Starfield in three depths, so panning moves through the sky rather
     // than past a painted one. The near layer keeps the brightness the old
@@ -302,15 +331,15 @@ void main() {
     // is the window corner scaled by the world. Earth is 94 by construction.
     // The 24 is decorations.corner_radius in config.toml and has to stay it:
     // these nine numbers are that one number wearing the planets' sizes.
-    col += card(c, D0, C0, uf, inside(cam, D0), 185.0)
-         + card(c, D1, C1, uf, inside(cam, D1),  87.0)    // Mercury, the pebble
-         + card(c, D2, C2, uf, inside(cam, D2),  94.0)
-         + card(c, D3, C3, uf, inside(cam, D3),  94.0)    // Earth
-         + card(c, D4, C4, uf, inside(cam, D4),  89.0)
-         + card(c, D5, C5, uf, inside(cam, D5), 123.0)    // Jupiter, the giant
-         + card(c, D6, C6, uf, inside(cam, D6), 120.0)
-         + card(c, D7, C7, uf, inside(cam, D7), 108.0)
-         + card(c, D8, C8, uf, inside(cam, D8), 108.0);
+    col += card(c, D0, C0, uf, inside(cam, D0), 185.0, px)
+         + card(c, D1, C1, uf, inside(cam, D1),  87.0, px)    // Mercury, the pebble
+         + card(c, D2, C2, uf, inside(cam, D2),  94.0, px)
+         + card(c, D3, C3, uf, inside(cam, D3),  94.0, px)    // Earth
+         + card(c, D4, C4, uf, inside(cam, D4),  89.0, px)
+         + card(c, D5, C5, uf, inside(cam, D5), 123.0, px)    // Jupiter, the giant
+         + card(c, D6, C6, uf, inside(cam, D6), 120.0, px)
+         + card(c, D7, C7, uf, inside(cam, D7), 108.0, px)
+         + card(c, D8, C8, uf, inside(cam, D8), 108.0, px);
 
     // Asteroid belt — a sparse annulus dividing the inner and outer system
     float band = 1.0 - smoothstep(90.0, 210.0, abs(r - BELT_R));
@@ -360,12 +389,20 @@ void main() {
         // away to a cooler limb, rather than spread flat across the whole
         // face. Pale was never a shortage of light, it was a shortage of
         // contrast.
+        //
+        // The colour and the darkening walk at different speeds on purpose:
+        // amber reaches further into the face than the dimming does, so a
+        // wide cooling ring shows before the light actually drops — without
+        // it the amber lived in the last few pixels before the edge and the
+        // disc read cream all over. And the edge itself is tight, because a
+        // star has a limb; the softness beyond it belongs to the corona.
         float d = clamp(r / SUN_R, 0.0, 1.0);
         float mu = sqrt(max(0.0, 1.0 - d * d));       // cosine of the view angle
         float limb = 0.34 + 0.66 * pow(mu, 0.55);     // the classic darkening law
+        float warm = smoothstep(-0.1, 0.9, mu);       // where the face runs amber
         float gran = 0.94 + 0.06 * noise(c * 0.014 + u_time * 0.02);
-        col += mix(SUN_LIMB, SUN_CORE, limb) * limb * gran
-             * (1.0 - smoothstep(SUN_R * 0.98, SUN_R * 1.015, r))
+        col += mix(SUN_LIMB, SUN_CORE, warm) * limb * gran
+             * (1.0 - smoothstep(SUN_R * 0.99, SUN_R * 1.006, r))
              * (0.12 + uf * 0.66) * sunlight;
     }
 
@@ -373,15 +410,20 @@ void main() {
     // gas giants, mottling for the rocky ones. Venus is nearly blank because
     // Venus is nearly blank — an unbroken deck of cloud — and Uranus is the
     // smoothest thing in the system.
-    //                                     band  mottle
-    col += planet(c, P1,  76.0, C1, bloom, 0.00, 0.18);   // Mercury, cratered
-    col += planet(c, P2, 103.0, C2, bloom, 0.03, 0.05);   // Venus, featureless
-    col += planet(c, P3, 105.0, C3, bloom, 0.00, 0.16);   // Earth, land and sea
-    col += planet(c, P4,  85.0, C4, bloom, 0.00, 0.20);   // Mars, albedo marks
-    col += planet(c, P5, 233.0, C5, bloom, 0.16, 0.03);   // Jupiter, belts
-    col += planet(c, P6, 220.0, C6, bloom, 0.10, 0.02);   // Saturn, fainter
-    col += planet(c, P7, 166.0, C7, bloom, 0.03, 0.00);   // Uranus, smooth
-    col += planet(c, P8, 165.0, C8, bloom, 0.05, 0.03);   // Neptune, faint bands
+    //
+    // The faces follow the same zoom strata as their brightness: a whisper at
+    // working zoom, and most themselves pulled back — which is when a planet
+    // is a landmark, and Jupiter's belts are how you know it is Jupiter.
+    float fc = 0.6 + 0.8 * uf;
+    //                                     band       mottle
+    col += planet(c, P1,  76.0, C1, bloom, 0.00,      0.18 * fc);   // Mercury, cratered
+    col += planet(c, P2, 103.0, C2, bloom, 0.03 * fc, 0.05 * fc);   // Venus, featureless
+    col += planet(c, P3, 105.0, C3, bloom, 0.00,      0.16 * fc);   // Earth, land and sea
+    col += planet(c, P4,  85.0, C4, bloom, 0.00,      0.20 * fc);   // Mars, albedo marks
+    col += planet(c, P5, 233.0, C5, bloom, 0.16 * fc, 0.03 * fc);   // Jupiter, belts
+    col += planet(c, P6, 220.0, C6, bloom, 0.10 * fc, 0.02 * fc);   // Saturn, fainter
+    col += planet(c, P7, 166.0, C7, bloom, 0.03 * fc, 0.00);        // Uranus, smooth
+    col += planet(c, P8, 165.0, C8, bloom, 0.05 * fc, 0.03 * fc);   // Neptune, faint bands
 
     // Saturn's rings as they are: the broad bright B ring, the Cassini
     // division, then the A ring — at their real extents in planet radii
@@ -455,9 +497,10 @@ void main() {
 
     col = mix(col, SHADE.rgb, SHADE.a);
 
-    // Vignette
+    // Vignette — held light, because the sky is dark already and a heavy one
+    // just turns the corners of a big panel to mud.
     vec2 vc = v_coords - 0.5;
-    col *= 1.0 - dot(vc, vc) * 0.40;
+    col *= 1.0 - dot(vc, vc) * 0.25;
 
     gl_FragColor = vec4(col, 1.0);
 }

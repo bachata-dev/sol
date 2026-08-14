@@ -39,15 +39,18 @@ autostart = [
   # the virgin session flies home, once ever — every session after wakes
   # wherever you left it, exactly as restore_camera promises
   "sol first-light",
-  # planet name plates
-  "foot -W 40x1 -a planet-label-1 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
-  "foot -W 40x1 -a planet-label-2 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e0af68 -e sh ~/.config/driftwm/label.sh 2 VENUS comms",
-  "foot -W 40x1 -a planet-label-3 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=7aa2f7 -e sh ~/.config/driftwm/label.sh 3 EARTH home",
-  "foot -W 40x1 -a planet-label-4 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=f7768e -e sh ~/.config/driftwm/label.sh 4 MARS ops",
-  "foot -W 40x1 -a planet-label-5 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=ff9e64 -e sh ~/.config/driftwm/label.sh 5 JUPITER builds",
-  "foot -W 40x1 -a planet-label-6 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=e6cfa1 -e sh ~/.config/driftwm/label.sh 6 SATURN media",
-  "foot -W 40x1 -a planet-label-7 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=7dcfff -e sh ~/.config/driftwm/label.sh 7 URANUS spare",
-  "foot -W 40x1 -a planet-label-8 -o main.font='JetBrains Mono:size=20' -o colors.alpha=0.0 -o colors.foreground=5a7fd0 -e sh ~/.config/driftwm/label.sh 8 NEPTUNE archive",
+  # Planet name plates. size=36 is chosen for the pulled-back views, where the
+  # plates are the only text on the canvas and the reason you can tell one
+  # busy world from another — at working zoom they are simply larger signage,
+  # sitting in the empty sky above the card.
+  "foot -W 40x1 -a planet-label-1 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=9aa5ce -e sh ~/.config/driftwm/label.sh 1 MERCURY quick",
+  "foot -W 40x1 -a planet-label-2 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=d08b3e -e sh ~/.config/driftwm/label.sh 2 VENUS comms",
+  "foot -W 40x1 -a planet-label-3 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=7aa2f7 -e sh ~/.config/driftwm/label.sh 3 EARTH home",
+  "foot -W 40x1 -a planet-label-4 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=f7768e -e sh ~/.config/driftwm/label.sh 4 MARS ops",
+  "foot -W 40x1 -a planet-label-5 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=ff9e64 -e sh ~/.config/driftwm/label.sh 5 JUPITER builds",
+  "foot -W 40x1 -a planet-label-6 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=e6cfa1 -e sh ~/.config/driftwm/label.sh 6 SATURN media",
+  "foot -W 40x1 -a planet-label-7 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=7dcfff -e sh ~/.config/driftwm/label.sh 7 URANUS spare",
+  "foot -W 40x1 -a planet-label-8 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=7477e0 -e sh ~/.config/driftwm/label.sh 8 NEPTUNE archive",
   # a terminal on Earth, so the first thing you see is home
   "foot -c ~/.config/driftwm/foot.ini -a home-term",
 ]
@@ -335,7 +338,9 @@ blur = true
 border_width = 1
 border_color = "#414868"
 border_color_focused = "#414868"
-corner_radius = 14
+# 12, like every overlay surface — the menu, the command line, the help card
+# and the launcher all agree, so the chrome reads as one family.
+corner_radius = 12
 
 # The context menu needs no rule at all. It is not a window on the canvas any
 # more — it is a layer-shell surface, like the bar, so the canvas neither
@@ -362,7 +367,7 @@ position = [0, -455]
 size = [1500, 46]
 decoration = "minimal"
 blur = true
-corner_radius = 10
+corner_radius = 12
 border_width = 1
 border_color = "#7aa2f7"
 border_color_focused = "#7aa2f7"
@@ -375,7 +380,7 @@ position = [0, 0]
 size = [920, 830]
 decoration = "minimal"
 blur = true
-corner_radius = 14
+corner_radius = 12
 border_width = 1
 border_color = "#7aa2f7"
 border_color_focused = "#7aa2f7"

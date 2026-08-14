@@ -44,13 +44,13 @@ window#waybar {
 
 #custom-where.sun     { color: #f0d99a; }
 #custom-where.mercury { color: #9aa5ce; }
-#custom-where.venus   { color: #e0af68; }
+#custom-where.venus   { color: #d08b3e; }
 #custom-where.earth   { color: #7aa2f7; }
 #custom-where.mars    { color: #f7768e; }
 #custom-where.jupiter { color: #ff9e64; }
 #custom-where.saturn  { color: #e6cfa1; }
 #custom-where.uranus  { color: #7dcfff; }
-#custom-where.neptune { color: #5a7fd0; }
+#custom-where.neptune { color: #7477e0; }
 #custom-where.system  { color: #bb9af7; }
 #custom-where.space   { color: #565f89; font-weight: 500; }
 
@@ -128,7 +128,7 @@ window#waybar {
 tooltip {
   background: rgba(22, 22, 30, 0.96);
   border: 1px solid rgba(65, 72, 104, 0.6);
-  border-radius: 8px;
+  border-radius: 12px;    /* every overlay surface agrees on 12 */
 }
 tooltip label {
   color: #c0caf5;

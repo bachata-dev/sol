@@ -52,6 +52,7 @@ ease-in-out curve — so the view always travels, and never jumps.
 import json
 import math
 import os
+import re
 import signal
 import socket
 import sys
@@ -77,13 +78,13 @@ Planet = namedtuple("Planet", "n name x y a e peri body colour role")
 #             n  name        x      y     a   ecc     perihelion° body  colour   role
 PLANETS = [
     Planet(1, "Mercury",    789,    331, 1000, 0.20564,   77.50,  76, "#9aa5ce", "quick"),
-    Planet(2, "Venus",  -1089,  -1461, 1820, 0.00676,  131.60, 103, "#e0af68", "comms"),
+    Planet(2, "Venus",  -1089,  -1461, 1820, 0.00676,  131.60, 103, "#d08b3e", "comms"),
     Planet(3, "Earth",   -471,   2553, 2640, 0.01670,  103.03, 105, "#7aa2f7", "home"),
     Planet(4, "Mars",  -3202,   2007, 3460, 0.09342,  -23.81,  85, "#f7768e", "ops"),
     Planet(5, "Jupiter",  -4344,  -1125, 4280, 0.04835,   14.79, 233, "#ff9e64", "builds"),
     Planet(6, "Saturn",   3789,   3146, 5100, 0.05371,   92.48, 220, "#e6cfa1", "media"),
     Planet(7, "Uranus",   1826,   5663, 5920, 0.04724,  171.07, 166, "#7dcfff", "spare"),
-    Planet(8, "Neptune",   6634,    890, 6740, 0.00861,   44.87, 165, "#5a7fd0", "archive"),
+    Planet(8, "Neptune",   6634,    890, 6740, 0.00861,   44.87, 165, "#7477e0", "archive"),
 ]
 SUN = Planet(0, "Sun", 0, 0, 0, 0.0, 0.0, 502, "#f0d99a", "home base")
 PLACES = [SUN] + PLANETS
@@ -403,6 +404,15 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     z0 = d.zoom()
     mark(x0, y0, z0)               # a breadcrumb for `sol back`, once per command
     dist = math.hypot(tx - x0, ty - y0)
+    # Zoom is the one thing the compositor cannot change cheaply: a single
+    # zoom command stalls every frame while caches rebuild at the new scale
+    # (measured at 0.2–0.95s on a 4K iMac). Two districts rarely frame at
+    # exactly the same zoom, so without a dead-band nearly every hop paid
+    # that stall for a few percent of altitude nobody asked for. Within 8%,
+    # keep the altitude you have — a margin the framing already absorbs,
+    # traded against a freeze anyone can see.
+    if z0 > 0.0 and abs(tz - z0) <= z0 * 0.08:
+        tz = z0
     zooming = abs(tz - z0) > 0.005
 
     # Duration scales gently with distance: short hops feel immediate, long
@@ -417,8 +427,15 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     # long enough that flat travel would show nothing but empty sky.
     cruise = 0.0
     if not zooming and dist > 2200:
-        cruise = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
-        d.set_zoom(cruise)
+        want = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
+        # A climb has to buy a view to be worth its two zoom stalls (the
+        # same stalls the dead-band above exists for): a fifth of altitude
+        # shows nothing you were not already seeing, and costs a freeze
+        # anyone can see. Neighbouring planets hop flat; crossing the
+        # system still climbs.
+        if want < z0 * 0.80:
+            cruise = want
+            d.set_zoom(cruise)
 
     steps = max(2, int(dur * rate))
     start = time.perf_counter()
@@ -1203,7 +1220,8 @@ def release(d, st=None, travel=True):
     if m.get("chrome"):
         flip_chrome()
     mode_write(None)
-    paint(d, shade=(0.0, 0.0, 0.0, 0.0), corner=m.get("corner"))
+    paint(d, shade=(0.0, 0.0, 0.0, 0.0), corner=m.get("corner"),
+          border=m.get("border"))
     recount(st)
     spotlight(d, st)                  # the focused window comes forward again
     if travel and m.get("camera"):
@@ -1248,21 +1266,23 @@ def read_paint():
 CONFIG = os.path.expanduser("~/.config/driftwm/config.toml")
 
 
-def decoration_lines(lines):
-    """Index of every `corner_radius` line that belongs to `[decorations]`.
+def decoration_lines(lines, key="corner_radius"):
+    """Index of every `key` line that belongs to `[decorations]`.
 
-    The key is not unique in this file — the help card, the overview and the
+    The keys are not unique in this file — the help card, the overview and the
     name plates each set their own on a `[[window_rules]]` entry, and all four
     sit at column zero, so neither "the first one" nor "the unindented one"
     can tell them apart. What can is the table header last seen above them,
-    which is the only thing that decides who a TOML key belongs to.
+    which is the only thing that decides who a TOML key belongs to. The match
+    is on the exact key, because `border_color` must not answer for
+    `border_color_focused`.
     """
     table, found = "", []
     for i, line in enumerate(lines):
         bare = line.strip()
         if bare.startswith("["):
             table = bare
-        elif bare.startswith("corner_radius") and table == "[decorations]":
+        elif bare.partition("=")[0].strip() == key and table == "[decorations]":
             found.append(i)
     return found
 
@@ -1312,7 +1332,45 @@ def write_corner(px):
     return True
 
 
-def paint(d, shade=None, night=None, dark=None, corner=None):
+def read_border():
+    """`decorations.border_color` as the config currently has it.
+
+    Read rather than remembered, for the same reason as the corner: it is the
+    user's colour, and a mode has to put back what it found rather than what
+    sol shipped.
+    """
+    try:
+        with open(CONFIG) as f:
+            lines = f.readlines()
+        for i in decoration_lines(lines, "border_color"):
+            return lines[i].partition("=")[2].strip().strip('"')
+    except (OSError, IndexError):
+        pass
+    return None
+
+
+def write_border(colour):
+    """Set the resting border colour. True when the file actually changed."""
+    try:
+        with open(CONFIG) as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+    want = 'border_color = "%s"\n' % colour
+    hit = [i for i in decoration_lines(lines, "border_color") if lines[i] != want]
+    if not hit:
+        return False
+    for i in hit:
+        lines[i] = want
+    try:
+        with open(CONFIG, "w") as f:
+            f.writelines(lines)
+    except OSError:
+        return False
+    return True
+
+
+def paint(d, shade=None, night=None, dark=None, corner=None, border=None):
     """Set the sky's mode block, and reload only if it actually moved.
 
     Every value is read back before any of them is written, so `sol focus` at
@@ -1320,10 +1378,12 @@ def paint(d, shade=None, night=None, dark=None, corner=None):
     evening back on. A reload costs a shader recompile, which is why nothing
     here writes a file it did not change.
     """
-    # The corner rides along because driftwm reloads one config, not two: the
-    # shader and the decorations come back together, or the screen flickers
-    # twice for one keypress.
+    # The corner and the border ride along because driftwm reloads one config,
+    # not two: the shader and the decorations come back together, or the
+    # screen flickers twice for one keypress.
     moved = write_corner(corner) if corner is not None else False
+    if border is not None:
+        moved = write_border(border) or moved
 
     was_shade, was_night, was_dark = read_paint()
     shade = was_shade if shade is None else shade
@@ -1358,6 +1418,24 @@ def wash(place, kind):
     dark, amount = SHADES[kind]
     r, g, b = rgb(place.colour) if place else (0.0, 0.0, 0.0)
     return (r * dark, g * dark, b * dark, amount)
+
+
+def mode_border(place, base):
+    """The resting border while a mode is on: `base` walked a third of the
+    way towards the planet's own colour.
+
+    On the canvas the focus ring stays the one colour no planet owns — that
+    argument is settled in config.toml. But a mode hides the sky, and with it
+    every other way of knowing which world your tiles belong to; the border
+    whispering the district's colour is what is left saying it. A third,
+    because the border is a hairline seen a dozen times over a filled screen:
+    at full strength it would be the loudest thing on it.
+    """
+    if not place or not base:
+        return None
+    p, b = rgb(place.colour), rgb(base)
+    return "#%02x%02x%02x" % tuple(
+        min(255, round((pc * 0.35 + bc * 0.65) * 255)) for pc, bc in zip(p, b))
 
 
 # ── Filling a screen ──────────────────────────────────────────────────────
@@ -1748,8 +1826,9 @@ def cmd_focus(args):
     show, rest = wins[:n], wins[n:]
 
     plate = plate_of(st, place)
+    border = read_border()
     hold("focus", place, cam, z, wins + ([plate] if plate else []),
-         corner=read_corner())
+         corner=read_corner(), border=border)
     arrive(d, place)                             # arrive, then watch it assemble
     # Only if it is not already the answer. A Focus is what makes driftwm
     # consider bringing a window into view, and considering it during a
@@ -1779,7 +1858,8 @@ def cmd_focus(args):
     # The shade before the last of the camera holding, not after: the hold
     # is time spent saying nothing has moved, and putting the sky behind it
     # meant the tiles landed and the world went dark a beat later.
-    paint(d, shade=wash(place, "focus"), corner=MODE_CORNER)
+    paint(d, shade=wash(place, "focus"), corner=MODE_CORNER,
+          border=mode_border(place, border))
     hold_camera(d, place)
     recount(st)
     refresh(d)
@@ -1888,11 +1968,13 @@ def cmd_solo(args):
             want = named[0]
 
     plate = plate_of(st, place)
+    border = read_border()
     hold("solo", place, cam, z, wins + ([plate] if plate else []),
-         corner=read_corner())
+         corner=read_corner(), border=border)
     arrive(d, place)
     show_one(d, st, place, wins, want, *solo_size(st))
-    paint(d, shade=wash(place, "solo"), corner=MODE_CORNER)
+    paint(d, shade=wash(place, "solo"), corner=MODE_CORNER,
+          border=mode_border(place, border))
     recount(st)
     refresh(d)
 
@@ -1954,13 +2036,15 @@ def cmd_present(args):
     want = next((w for w in wins if w.get("is_focused")), wins[0])
 
     plate = plate_of(st, place)
+    border = read_border()
     hold("present", place, cam, z, wins + ([plate] if plate else []),
-         chrome=True, corner=read_corner())
+         chrome=True, corner=read_corner(), border=border)
     flip_chrome()
     notifications(False)
     arrive(d, place)
     show_one(d, st, place, wins, want, *usable(st, chrome=False))
-    paint(d, shade=wash(place, "present"), corner=MODE_CORNER)
+    paint(d, shade=wash(place, "present"), corner=MODE_CORNER,
+          border=mode_border(place, border))
 
 
 def solo_size(st):
@@ -2432,9 +2516,9 @@ def cmd_arrange(args):
     glide(d, plan)                    # every district settles as one motion
     spotlight(d, st)
     write_plates(st)
-    write_cards(d, st)
     if len(places) == 1:
         fly(d, *frame(st, places[0], (ow, oh)))
+    write_cards(d, st)                # after the motion — the reload freezes frames
 
 
 def step_in_mode(d, st, step):
@@ -2600,9 +2684,14 @@ def cmd_send(args):
     glide(d, plan, arc=ARC if was and was.n != p.n else 0.0)
     spotlight(d, st)
     write_plates(st)
-    write_cards(d, st)
     if "--stay" not in args:
         fly(d, *frame(st, p, (ow, oh)))
+    # The cards last, after everything has stopped moving. Rewriting them
+    # costs a config reload and a shader recompile — a third of a second of
+    # frozen frames on a 4K screen — and paying that *between* the glide and
+    # the flight put the freeze exactly where the eye was. Against a still
+    # sky it is one dropped twinkle.
+    write_cards(d, st)
 
 
 def _resettle(d, st, wins, dst, others=()):
@@ -4613,8 +4702,34 @@ HELP = """
 """
 
 
+def help_colour(text):
+    """The card with its hierarchy said in colour: headings in the Sun's
+    gold, every key in Earth's blue — the accent the command line and the
+    card's own border already wear — and the roster at the foot in each
+    planet's colour, so the card quietly teaches the palette you navigate
+    by. The text itself is untouched; a card is not less of a reference for
+    being legible at a glance.
+    """
+    gold = "\033[38;2;240;217;154m"
+    blue = "\033[38;2;122;162;247m"
+    rst = "\033[0m"
+    # Keys first, or the heading colour laid around GO would be reset by the
+    # first key on its own line.
+    text = re.sub(r"mod\+[^\s,]+", lambda m: blue + m.group(0) + rst, text)
+    for head in ("A CROWDED PLANET", "FOUR FINGERS", "THE MOUSE",
+                 "MODES", "CARRY", "GO", "DO"):
+        text = re.sub(r"(?<![A-Z])%s(?![A-Z])" % head,
+                      gold + head + rst, text)
+    text = text.replace("☉  S O L", gold + "☉  S O L" + rst)
+    text = text.replace("☉ at the far left", gold + "☉" + rst + " at the far left")
+    for p in PLANETS:
+        text = text.replace("%d %s" % (p.n, p.name),
+                            PCOL[p.n] + "%d %s" % (p.n, p.name) + rst)
+    return text
+
+
 def cmd_help(args):
-    print(HELP)
+    print(help_colour(HELP) if sys.stdout.isatty() else HELP)
     if "--hold" in args:
         try:
             while True:
@@ -4637,16 +4752,23 @@ C_DIM, C_FG, C_CAM = "\033[38;2;65;72;104m", "\033[38;2;192;202;245m", "\033[38;
 C_SUN, C_RST = "\033[38;2;224;175;104m", "\033[0m"
 C_ORB = "\033[38;2;48;56;84m"       # the orbit hairlines, kept to a whisper
 C_KEY = "\033[38;2;86;95;137m"      # the key hints along the bottom
-PCOL = {1: "\033[38;2;154;165;206m", 2: "\033[38;2;224;175;104m",
+PCOL = {1: "\033[38;2;154;165;206m", 2: "\033[38;2;208;139;62m",
         3: "\033[38;2;122;162;247m", 4: "\033[38;2;247;118;142m",
         5: "\033[38;2;255;158;100m", 6: "\033[38;2;230;207;161m",
-        7: "\033[38;2;125;207;255m", 8: "\033[38;2;90;127;208m"}
+        7: "\033[38;2;125;207;255m", 8: "\033[38;2;116;119;224m"}
 PCOL[0] = C_SUN
 
 OV_SPAN = SYSTEM_R * 1.10
 PANE = 34                           # side pane: what the selected planet holds
 TOP = 3                             # the map starts on this terminal row
 LEFT = 2                            # ... and in this column
+
+# The wash the map lays over the sky while it is up. Neutral rather than any
+# planet's colour, because the map is about everywhere at once — and only
+# deep enough that the astronomy steps back and the panel comes forward. The
+# windows around the panel stay lit (driftwm has no dimmer for them); the sky
+# behind them going quiet is what makes the map read as the foreground.
+OV_SHADE = (0.031, 0.031, 0.047, 0.35)
 
 
 def orbit_points(p, n=200):
@@ -4937,6 +5059,21 @@ def cmd_map(args):
         old = None              # stdin is not a terminal: draw once, read nothing
     sys.stdout.write("\033[?1049h\033[?25l\033[2J\033[?1006h\033[?1000h")
 
+    # The sky goes to shade while the map is up, and comes back when it goes.
+    # Not when a mode is on — the mode's wash already owns the sky, and this
+    # putting it back on exit would put back the wrong one. mod+e closes the
+    # map by killing its *terminal*, and what reaches this process is the pty
+    # hanging up — SIGHUP, with SIGTERM for anyone addressing sol directly.
+    # Both have to leave through the same `finally` every other exit does, or
+    # the shade outlives the map.
+    keep, dimmed = None, False
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
+    if not mode_now():
+        keep = read_paint()[0]
+        paint(d, shade=OV_SHADE)
+        dimmed = True
+
     st0 = d.state()
     at, _, _ = whereabouts(st0, d.camera(), d.zoom())
     sel = [at if at else SUN, 0]
@@ -4983,6 +5120,8 @@ def cmd_map(args):
     except KeyboardInterrupt:
         pass
     finally:
+        if dimmed:
+            paint(d, shade=keep)
         if old:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         sys.stdout.write("\033[?1000l\033[?1006l\033[?25h\033[?1049l")
