@@ -392,8 +392,15 @@ def settle_zoom(d, tz, timeout=0.45, rate=90):
         time.sleep(1.0 / rate)
 
 
-def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
+def fly(d, tx, ty, tz=WORK_ZOOM, rate=90, remember=True):
     """Glide the view to a point. Never jumps.
+
+    The flight holds the `moving` stamp, so everything that defers to sol's
+    own motion — the watcher's settling beat, a test suite's `quiet()` —
+    defers to flights exactly as it defers to glides. `remember=False` is for
+    flights nobody asked for by name: the watcher finishing a layout must not
+    overwrite the breadcrumb `sol back` answers with, which belongs to the
+    last place *you* flew from.
 
     The camera is streamed as an eased path at `rate` Hz, paced against a
     deadline rather than by sleeping a fixed slice, so a flight takes the time
@@ -427,7 +434,8 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     """
     x0, y0 = d.camera()
     z0 = d.zoom()
-    mark(x0, y0, z0)               # a breadcrumb for `sol back`, once per command
+    if remember:
+        mark(x0, y0, z0)           # a breadcrumb for `sol back`, once per command
     dist = math.hypot(tx - x0, ty - y0)
     # Zoom is the one thing the compositor cannot change cheaply: a single
     # zoom command stalls every frame while caches rebuild at the new scale
@@ -444,45 +452,46 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     # journeys read as travel.
     dur = 0.45 + 0.55 * min(1.0, dist / 6000.0)
 
-    if zooming and tz < z0:
-        d.set_zoom(tz)                                 # pull back, then travel
-        settle_zoom(d, tz)
+    with moving():
+        if zooming and tz < z0:
+            d.set_zoom(tz)                             # pull back, then travel
+            settle_zoom(d, tz)
 
-    # Cruise altitude: high enough that departure and destination share the
-    # screen, never lower than a district frame, and only when the flight is
-    # long enough that flat travel would show nothing but empty sky.
-    cruise = 0.0
-    if not zooming and dist > 2200:
-        want = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
-        # A climb has to buy a view to be worth interrupting the stream for
-        # (see settle_zoom): a fifth of altitude shows nothing you were not
-        # already seeing. Neighbouring planets hop flat; crossing the system
-        # still climbs.
-        if want < z0 * 0.80:
-            cruise = want
-            d.set_zoom(cruise)
-            settle_zoom(d, cruise)
+        # Cruise altitude: high enough that departure and destination share
+        # the screen, never lower than a district frame, and only when the
+        # flight is long enough that flat travel would show nothing but sky.
+        cruise = 0.0
+        if not zooming and dist > 2200:
+            want = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
+            # A climb has to buy a view to be worth interrupting the stream
+            # for (see settle_zoom): a fifth of altitude shows nothing you
+            # were not already seeing. Neighbouring planets hop flat;
+            # crossing the system still climbs.
+            if want < z0 * 0.80:
+                cruise = want
+                d.set_zoom(cruise)
+                settle_zoom(d, cruise)
 
-    steps = max(2, int(dur * rate))
-    start = time.perf_counter()
-    for i in range(1, steps + 1):
-        t = i / steps
-        e = 0.5 - 0.5 * math.cos(math.pi * t)          # ease in-out
-        d.set_camera(x0 + (tx - x0) * e, y0 + (ty - y0) * e)
-        ahead = (start + t * dur) - time.perf_counter()
-        if ahead > 0:
-            time.sleep(ahead)
+        steps = max(2, int(dur * rate))
+        start = time.perf_counter()
+        for i in range(1, steps + 1):
+            t = i / steps
+            e = 0.5 - 0.5 * math.cos(math.pi * t)      # ease in-out
+            d.set_camera(x0 + (tx - x0) * e, y0 + (ty - y0) * e)
+            ahead = (start + t * dur) - time.perf_counter()
+            if ahead > 0:
+                time.sleep(ahead)
 
-    if zooming and tz > z0:
-        d.set_zoom(tz)                                 # settle in on arrival
-    elif cruise:
-        d.set_zoom(tz)                                 # descend, over the mark
+        if zooming and tz > z0:
+            d.set_zoom(tz)                             # settle in on arrival
+        elif cruise:
+            d.set_zoom(tz)                             # descend, over the mark
 
-    hold = 0.4 if (zooming or cruise) else 0.06
-    until = time.perf_counter() + hold
-    while time.perf_counter() < until:
-        d.set_camera(tx, ty)
-        time.sleep(1.0 / rate)
+        hold = 0.4 if (zooming or cruise) else 0.06
+        until = time.perf_counter() + hold
+        while time.perf_counter() < until:
+            d.set_camera(tx, ty)
+            time.sleep(1.0 / rate)
 
 
 # ── Windows travel too ────────────────────────────────────────────────────
@@ -1046,15 +1055,19 @@ CARD_HEAD = "// ── districts ──"
 CARD_TAIL = "// ── end districts ──"
 
 
-def bounds(st, place, skip=None):
+def bounds(st, place, skip=()):
     """The rectangle a district occupies: its windows and its world.
 
-    `skip` leaves one window out of the reckoning. The drag-catcher needs
-    the card as it stood before the drag — a box that includes the window
-    you are holding stretches to wherever you drop it, and every drop in
-    the neighbourhood then reads as "still inside".
+    `skip` leaves windows out of the reckoning — one id or a set of them.
+    The drag-catcher needs the card as it stood before the drag, and the
+    settling beat needs it as it stood before the births: a box that
+    includes the window you are holding (or one still sitting wherever it
+    was spawned) stretches to wherever that is, and the question being
+    asked is about the district, not about the stray.
     """
-    wins = [w for w in district(st, place) if w["id"] != skip]
+    left_out = skip if isinstance(skip, (set, frozenset, tuple, list)) \
+        else (skip,)
+    wins = [w for w in district(st, place) if w["id"] not in left_out]
     if not wins:
         return None
     boxes = [(w["position"], w["size"]) for w in wins]
@@ -1095,6 +1108,22 @@ def write_cards(d, st):
     except OSError:
         return
     d.action("reload-config")
+
+
+def in_view(st, place, cam, zoom, skip=()):
+    """Is everything at this place already inside the viewport?
+
+    The district's own box, not the wider one `frame` works from: the name
+    plate hangs above the grid on purpose, and a plate sliding under the top
+    of the screen is not what makes a window unreachable. A window is.
+    """
+    box = bounds(st, place, skip)
+    if not box:
+        return True
+    ow, oh = screen(st)
+    z = max(zoom, 0.01)
+    return abs(box[0] - cam[0]) + box[2] <= ow / (2.0 * z) \
+        and abs(box[1] - cam[1]) + box[3] <= oh / (2.0 * z)
 
 
 def frame(st, place, aspect_wh):
@@ -2990,7 +3019,7 @@ def relay(d, st, places, claims=None, origins=None, arc=0.0):
     write_cards(d, st)
 
 
-def settle_in(d, ids, where, closed=()):
+def settle_in(d, ids, where, closed=(), coming=()):
     """Windows have opened or closed: fold the change into the districts.
 
     Births and deaths arrive at the same door because they ask for the same
@@ -3024,10 +3053,31 @@ def settle_in(d, ids, where, closed=()):
     want = set(ids)
     fresh = [w for w in real_windows(st) if w["id"] in want]
     claims = read_claims()
+
+    # Whether the camera may follow is decided *now*, before anything moves:
+    # from a camera read this instant — not the snapshot, which by the time
+    # the glide ends is hundreds of milliseconds stale and, mid-`sol goto`,
+    # is a point the camera was merely passing through — and against the
+    # district as it stands before it grows. A district you had wholly in
+    # view is one you were watching at rest; one you did not is a place you
+    # had deliberately gone *into*, and the camera there is not sol's to
+    # take. See `make_room` for the rest of the covenant.
+    room, cam, zoom = None, (0.0, 0.0), 1.0
+    if fresh:
+        cam, zoom = d.camera(), d.zoom()
+        here, on_it, _ = whereabouts(st, cam, zoom)
+        # The newborns are skipped from the reckoning — this beat's and the
+        # ones still hatching behind them: all of them are still sitting
+        # wherever they were spawned, and the question is whether the
+        # district *as it stood* was being watched whole.
+        if here is not None and on_it \
+                and in_view(st, here, cam, zoom, skip=want | set(coming)):
+            room = here
+
     # From 1: a claim on the Sun is either an old claims file or a hand-edited
     # one, and either way it names a place that does not hold windows.
     places = {n: PLACES[n] for n in closed if 1 <= n < len(PLACES)}
-    named, origins = [], {}
+    named, origins, born = [], {}, {}
     for w in fresh:
         p = home_of(w, where) if where else None
         at = tuple(w["position"])
@@ -3045,15 +3095,65 @@ def settle_in(d, ids, where, closed=()):
             place = belongs_to(w, claims)
             if place is None:
                 continue              # born in deep space; `sol gather` is for that
+        born[w["id"]] = place.n
         places[place.n] = place
         named.append(str(w.get("app_id"))[:20])
+
+    # ...and only for a birth that answers a key you pressed: the keyboard
+    # is on a window born here this beat, or on one still hatching behind
+    # it — three consoles opened in a burst settle one beat apiece, and the
+    # keyboard rides the last of them the whole time. A closure is never a
+    # reason to move you, and neither is a window arriving somewhere you
+    # merely happen to be able to see.
+    if room is not None and not any(
+            w.get("is_focused") and born.get(w["id"]) == room.n
+            for w in fresh) and not any(
+            w.get("is_focused") and w["id"] in coming
+            for w in real_windows(st)):
+        room = None
+
     if not places:
         return True
     relay(d, st, places.values(), claims, origins,
           arc=ARC if origins else 0.0)
+    if fresh:
+        # The newcomer has the keyboard — driftwm hands it over on the first
+        # commit — so it should also read as the one that has it. Without this
+        # it arrives at the same weight as everything already there, and the
+        # only thing saying which window your typing is going into is a border.
+        spotlight(d, st)
+        make_room(d, st, room, cam, zoom)
     if named:
         footer("%s arrived · mod+a" % ", ".join(named[:3]))
     return True
+
+
+def make_room(d, st, place, cam, zoom):
+    """Bring the district you were watching back into view, if it grew out.
+
+    The covenant is that the camera moves only when you ask it to, and this
+    keeps it — by moving only to *finish* what a keypress started. A window
+    opening on Neptune while you read something on Mars moves nothing. A
+    window opening on the planet you were deliberately zoomed into moves
+    nothing either: `settle_in` only hands a place in when the whole district
+    was in view before it grew, because a camera parked inside a district is
+    a reading position, and a reading position is not sol's to spend. What is
+    left is the one honest case — you were watching the whole grid, a
+    terminal you asked for grew it a row, and the newcomer now holding the
+    keyboard hangs under the bottom edge of the screen. You would be typing
+    into a window you cannot see, which is the worst of both promises: the
+    view did not wander, and it did not stay useful either. Framing the
+    district finishes what mod+return started.
+
+    And when the district still fits, nothing moves at all — which is every
+    time a planet has room for one more, and so is most of the time. The
+    checks are what keep this from becoming the follow-the-new-window
+    behaviour the one rule exists to switch off.
+    """
+    if place is None or in_view(st, place, cam, zoom):
+        return                        # there is still room; nothing to finish
+    ow, oh = screen(st)
+    fly(d, *frame(st, place, (ow, oh)), remember=False)
 
 
 def unmaximised(d, st, w):
@@ -3079,7 +3179,7 @@ def unmaximised(d, st, w):
     write_cards(d, st)               # the grid just changed size; so did the card
     st.pop("sol_districts", None)
     fresh = d.state()
-    fly(d, *frame(fresh, place, (ow, oh)))
+    fly(d, *frame(fresh, place, (ow, oh)), remember=False)
     footer("back from full · %d %s" % (place.n, place.name))
 
 
@@ -3327,7 +3427,8 @@ def cmd_watch(args):
             closed = sorted(orphaned)
             orphaned = set()
             try:
-                if not settle_in(act, ripe, where, closed=closed):
+                if not settle_in(act, ripe, where, closed=closed,
+                                 coming=set(hatching)):
                     # A mode is on. The births are remode's to show and their
                     # homes have been honoured; the closed districts keep,
                     # for the first beat after the mode ends.

@@ -1192,6 +1192,34 @@ def close_down_to(mod, place, wins, want):
     return state()
 
 
+def view(st):
+    """Where the camera is standing, to the precision a check should care."""
+    out = MOD.active_output(st)
+    return (round(out["camera"][0]), round(out["camera"][1]),
+            round(out["zoom"], 3))
+
+
+def viewport(st):
+    """The canvas rectangle the screen is showing: (x0, x1, y0, y1)."""
+    out = MOD.active_output(st)
+    (cx, cy), z = out["camera"], max(out["zoom"], 0.01)
+    ow, oh = MOD.screen(st)
+    return cx - ow / (2 * z), cx + ow / (2 * z), cy - oh / (2 * z), cy + oh / (2 * z)
+
+
+def on_screen(st, wins):
+    """Are all of these windows wholly inside the viewport?
+
+    The claim a new console has to satisfy: it has the keyboard, so it has to
+    be somewhere you can watch yourself type into it.
+    """
+    x0, x1, y0, y1 = viewport(st)
+    return all(x0 <= w["position"][0] - w["size"][0] / 2.0
+               and w["position"][0] + w["size"][0] / 2.0 <= x1
+               and y0 <= w["position"][1] - w["size"][1] / 2.0
+               and w["position"][1] + w["size"][1] / 2.0 <= y1 for w in wins)
+
+
 def test_settling(mod):
     print("\n19. a district closes over what arrives and what leaves")
     sol("mode", "off")
@@ -1200,13 +1228,18 @@ def test_settling(mod):
     reset_canvas()
     place = mod.PLANETS[3]                     # Mars: ops, and nobody else's
     sol("goto", "4")
-    time.sleep(1.8)
+    time.sleep(0.5)
+    quiet()                                    # flights stamp `moving` now too
 
     # A window is announced before its client has committed a buffer, at a
     # placeholder size a few pixels across. Laying the district out around
     # that gave the newcomer a cell four pixels wide and drew the card to
     # match — so these checks are about the size sol waited for, not the size
     # it was first told.
+    #
+    # The camera is captured *before* the spawn, or the stillness check below
+    # compares the after-state to itself and can never fail.
+    was = view(state())
     spawn(1, settle=2.5)
     st = state()
     wins = mod.assignment(st).get(place.n, [])
@@ -1220,11 +1253,17 @@ def test_settling(mod):
           not outside(card_of(mod, place.n), wins),
           "card %s, window %s at %s" % (card_of(mod, place.n),
                                         wins[0]["size"], wins[0]["position"]))
+    check("it has the keyboard", any(w.get("is_focused") for w in wins),
+          [(w["id"], w.get("is_focused")) for w in wins])
+    check("and nothing moved to show it, because it already fitted",
+          view(st) == was and on_screen(st, wins),
+          "%s -> %s" % (was, view(st)))
 
     # Three more, one after another: the district grows a row and the card
-    # has to grow with it.
+    # has to grow with it — and the row it grows hangs off the bottom of the
+    # screen, which is where the window now holding the keyboard would be.
     spawn(3, settle=3.0)
-    time.sleep(1.5)
+    quiet()
     st = state()
     wins = mod.assignment(st).get(place.n, [])
     if not check("Mars is holding four", len(wins) == 4, len(wins)):
@@ -1235,6 +1274,14 @@ def test_settling(mod):
     check("and the card holds all four",
           not outside(card_of(mod, place.n), wins),
           "card %s" % (card_of(mod, place.n),))
+    check("the view came back to hold them",
+          on_screen(st, wins), "%s vs %s" % (view(st), viewport(st)))
+    # The filter has to be proven non-empty, or losing the keyboard entirely
+    # would pass this vacuously — the exact regression it exists to catch.
+    holder = [w for w in wins if w.get("is_focused")]
+    check("including the one with the keyboard",
+          bool(holder) and on_screen(st, holder),
+          [(w["id"], w.get("is_focused")) for w in wins])
     grown = card_of(mod, place.n)
 
     # And the other half. A district that loses a window must close the gap
@@ -1269,6 +1316,64 @@ def test_settling(mod):
           not outside(shrunk, wins), "card %s" % (shrunk,))
 
 
+# ── 20. a new console can be typed into, straight away ────────────────────
+def test_typing(mod):
+    """The claim behind the whole settling story, tested with a real keyboard.
+
+    Everything else in group 19 is geometry: the window is on the grid, inside
+    the card, on the screen. This is the thing all of that is *for* — you press
+    mod+return and you start typing, without waiting for anything and without
+    clicking on anything. It is checked through /dev/uinput rather than through
+    `is_focused`, because a state field saying "focused" and a keystroke
+    actually reaching the client are two different claims, and only the second
+    one is the promise.
+
+    Typed while sol is still working: the delay is shorter than the hatch, so
+    the keys land during the wait, the settling glide and the camera's flight
+    — the three things that could plausibly interrupt it and must not.
+    """
+    print("\n20. you can type into a new console straight away")
+    ensure_watcher()
+    reset_canvas()
+    sol("goto", "4")
+    time.sleep(1.8)
+    if os.geteuid() != 0 and not os.path.exists(HAND):
+        check("sol-hand is installed", False, "no %s" % HAND)
+        return
+    script = os.path.join(tempfile.gettempdir(), "sol-acceptance-read.sh")
+    said = os.path.join(tempfile.gettempdir(), "sol-acceptance-typed")
+    with open(script, "w") as f:
+        f.write("read -r x\nprintf '%%s' \"$x\" > %s\n" % said)
+    for wait, when in ((0.15, "while it is still hatching"),
+                       (0.9, "while the district is closing over it")):
+        if os.path.exists(said):
+            os.remove(said)
+        msg("action", "spawn", "foot -a typetest -e sh %s" % script)
+        time.sleep(wait)
+        run("sudo", HAND, "key", "j", "k", "enter")
+        for _ in range(20):
+            time.sleep(0.3)
+            if os.path.exists(said):
+                break
+        got = ""
+        try:
+            with open(said) as f:
+                got = f.read()
+        except OSError:
+            pass
+        check("typed %s, and the console got it" % when, got == "jk",
+              "read back %r" % got)
+        time.sleep(1.5)
+    for w in state().get("windows", []):
+        if w.get("app_id") == "typetest":
+            msg("close", "--id", str(w["id"]))
+    for path in (script, said):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -1282,6 +1387,7 @@ def main():
         ("geometry", test_mode_geometry), ("paint", test_mode_paint),
         ("focus", test_focus_live), ("follows", test_mode_follows),
         ("exclusive", test_mode_exclusive), ("settling", test_settling),
+        ("typing", test_typing),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))
