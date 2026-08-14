@@ -19,8 +19,39 @@ sol (1.2.0) unstable; urgency=medium
   * Session entries honor TryExec, so a half-uninstalled desktop leaves the
     picker; gdm is no longer accused of needing an X server its greeter
     does not want; driftwm is required only by the sessions that run it.
+  * A sky you can tell apart: Venus goes bronze and Neptune indigo so no
+    two worlds rhyme, district cards get a drawn edge, the Sun a limb, the
+    name plates a size you can read from orbit, the help card its
+    hierarchy in colour, and every overlay the same corner. A mode tints
+    the resting window border with its planet's colour, and the overview
+    shades the sky behind it — and puts it back, even when its terminal is
+    killed under it.
+  * Flights stop stumbling. The district-card rewrite waits until the
+    camera lands, because a shader reload freezes the frame and used to
+    land mid-journey; near-equal zooms keep their altitude; a cruise climb
+    has to buy a view; and no zoom command is ever issued while the path
+    is streaming, because driftwm's zoom tick owns the camera during its
+    ease and discards everything it is sent. Flights hold the moving
+    stamp, and a flight nobody asked for by name no longer overwrites the
+    breadcrumb `sol back` answers with.
+  * A district closes over what arrives and what leaves. A window is left
+    alone until it has hatched — driftwm announces a toplevel before its
+    client commits a buffer — and past a second a thin window is taken at
+    its word. Births, deaths and carryings landing in one beat fold in as
+    one motion with one card write; what a mode must defer is kept for
+    the beat after it ends; a home is honoured mode or no mode; and the
+    claims file is written once per pass, not once per district.
+  * The camera finishes what a keypress started, and nothing else: the
+    view reframes only when you were watching the whole district and a
+    console you asked for grew it past the edge — with the keyboard on a
+    window of that burst — never for a closure, and never out of a
+    reading position you deliberately went into.
+  * The Sun holds nothing, everywhere the rule is asked: windows live on
+    the eight planets, a window at the origin belongs to Mercury, gather
+    goes home, and a stale claim on the origin is an old file, not a
+    district.
 
- -- sol <noreply@github.com>  Fri, 14 Aug 2026 02:30:00 +0000
+ -- sol <noreply@github.com>  Fri, 14 Aug 2026 12:30:00 +0000
 
 sol (1.1.0) unstable; urgency=medium
 
