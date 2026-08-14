@@ -376,6 +376,22 @@ def mark(x, y, z):
         pass                        # a missing breadcrumb is not worth a crash
 
 
+def settle_zoom(d, tz, timeout=0.45, rate=90):
+    """Wait out driftwm's own zoom ease before streaming anything else.
+
+    The ease converges in about a quarter of a second (measured: 99.9% in
+    ~240ms), and while it runs the zoom tick discards every camera target it
+    finds. Waiting costs nothing the fight was not already costing — the
+    steps streamed into the ease were being thrown away — and the timeout is
+    only for a compositor that never settles, which must not hang a flight.
+    """
+    until = time.perf_counter() + timeout
+    while time.perf_counter() < until:
+        if abs(d.zoom() - tz) <= tz * 0.02:
+            return
+        time.sleep(1.0 / rate)
+
+
 def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     """Glide the view to a point. Never jumps.
 
@@ -388,7 +404,15 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     frame drags the camera backwards and the flight never arrives. One command
     is also all that is needed — driftwm eases zoom itself over ~250ms.
 
-    That single command is ordered like a real flight: zoom out before setting
+    And while that ease runs, driftwm's zoom tick owns the camera: it derives
+    the camera from its anchor every frame and discards any camera target it
+    finds, which is every step this function streams. Streaming through the
+    ease therefore reads as the flight catching on something — the camera
+    stands still, then jumps to wherever the stream has got to. So the ease
+    is waited out instead (`settle_zoom`), and no zoom command is ever issued
+    while the path is being streamed.
+
+    That ordering is also the shape of a real flight: zoom out before setting
     off, so you see the space you are about to cross, and zoom in on arrival.
     Afterwards the target is held briefly, because the tail of the zoom
     animation would otherwise pull the camera off the mark.
@@ -396,9 +420,10 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     A long flight at level zoom climbs. Two planets at working zoom are two
     screens that never overlap, so a flat hop is a featureless slide past
     nothing — the pull-back is what shows the belt passing beneath you and
-    the place you left shrinking behind. Same two-command pattern the
-    zooming case already proved: cruise altitude at departure, target zoom
-    on the descent, and the arrival hold soaks up driftwm's easing tail.
+    the place you left shrinking behind. The descent happens on arrival, over
+    the mark, where the hold streams the one point the zoom anchor agrees
+    about — descending *on approach* put the ease mid-stream, and the camera
+    visibly stalled at the descent point on every long hop.
     """
     x0, y0 = d.camera()
     z0 = d.zoom()
@@ -421,6 +446,7 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
 
     if zooming and tz < z0:
         d.set_zoom(tz)                                 # pull back, then travel
+        settle_zoom(d, tz)
 
     # Cruise altitude: high enough that departure and destination share the
     # screen, never lower than a district frame, and only when the flight is
@@ -428,31 +454,29 @@ def fly(d, tx, ty, tz=WORK_ZOOM, rate=90):
     cruise = 0.0
     if not zooming and dist > 2200:
         want = max(MIN_FRAME_ZOOM, min(z0 * 0.85, 1400.0 / dist))
-        # A climb has to buy a view to be worth its two zoom stalls (the
-        # same stalls the dead-band above exists for): a fifth of altitude
-        # shows nothing you were not already seeing, and costs a freeze
-        # anyone can see. Neighbouring planets hop flat; crossing the
-        # system still climbs.
+        # A climb has to buy a view to be worth interrupting the stream for
+        # (see settle_zoom): a fifth of altitude shows nothing you were not
+        # already seeing. Neighbouring planets hop flat; crossing the system
+        # still climbs.
         if want < z0 * 0.80:
             cruise = want
             d.set_zoom(cruise)
+            settle_zoom(d, cruise)
 
     steps = max(2, int(dur * rate))
     start = time.perf_counter()
-    descended = cruise == 0.0
     for i in range(1, steps + 1):
         t = i / steps
         e = 0.5 - 0.5 * math.cos(math.pi * t)          # ease in-out
         d.set_camera(x0 + (tx - x0) * e, y0 + (ty - y0) * e)
-        if not descended and t >= 0.62:
-            d.set_zoom(tz)                             # descend on approach
-            descended = True
         ahead = (start + t * dur) - time.perf_counter()
         if ahead > 0:
             time.sleep(ahead)
 
     if zooming and tz > z0:
         d.set_zoom(tz)                                 # settle in on arrival
+    elif cruise:
+        d.set_zoom(tz)                                 # descend, over the mark
 
     hold = 0.4 if (zooming or cruise) else 0.06
     until = time.perf_counter() + hold
