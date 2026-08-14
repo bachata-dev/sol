@@ -33,7 +33,7 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol back                     the camera to where it was before the last flight
   sol find [word]              fly to a window by name, wherever it is
   sol tidy                     gather, arrange every planet, sweep the overgrown
-  sol gather [place]           bring every adrift window in (default: the Sun)
+  sol gather [place]           bring every adrift window in (default: home)
   sol sweep [from] [to]        drain a planet's stack to the archive
   sol homes                    which app lives on which planet
   sol tour                     a narrated first flight; touch anything to stop
@@ -600,14 +600,31 @@ def find_place(token):
     return None
 
 
-def nearest(x, y):
+def nearest(x, y, among=PLACES):
     """Nearest place to a point, and how far away it is."""
-    best, bd = SUN, math.hypot(x, y)
-    for p in PLANETS:
+    best, bd = None, None
+    for p in among:
         dd = math.hypot(x - p.x, y - p.y)
-        if dd < bd:
+        if bd is None or dd < bd:
             best, bd = p, dd
     return best, bd
+
+
+def lands_on(x, y):
+    """The planet a window at this point belongs to, and how far off it is.
+
+    The Sun is somewhere you go, not somewhere things live. It is home base —
+    the one view with the whole inner system in it and no work of its own on
+    top of that — and a window that settled there would be the one thing
+    guaranteed to be in the way of every arrival and every departure. So the
+    district rule reads the eight planets and nothing else, and a window put
+    down at the origin belongs to Mercury, which is a hop away.
+
+    Navigation still counts the Sun: `nearest` unqualified is what answers
+    "where is the camera" and "what did you point at", and mod+0 has to keep
+    landing somewhere.
+    """
+    return nearest(x, y, PLANETS)
 
 
 # ── Districts ─────────────────────────────────────────────────────────────
@@ -743,10 +760,12 @@ def belongs_to(w, claims):
     """
     x, y = w["position"]
     n = claims.get(w["id"], -1)
-    put = PLACES[n] if 0 <= n < len(PLACES) else None
+    # From 1: a claim on the Sun is either an old claims file or a hand-edited
+    # one, and either way it names a place that does not hold windows.
+    put = PLACES[n] if 1 <= n < len(PLACES) else None
     if put is not None and math.hypot(x - put.x, y - put.y) <= DISTRICT:
         return put
-    place, dd = nearest(x, y)
+    place, dd = lands_on(x, y)
     return place if dd <= DISTRICT else None
 
 
@@ -909,7 +928,7 @@ def grid(place, wins, aspect):
     return slots, width, height
 
 
-def tidy(d, st, place, aspect, plan=None):
+def tidy(d, st, place, aspect, plan=None, claims=None):
     """Lay a place's windows out in a grid and lift its name plate clear.
 
     Past DECK windows the grid stops growing and the rest collapse into a
@@ -917,17 +936,20 @@ def tidy(d, st, place, aspect, plan=None):
 
     Collects its moves into `plan` rather than making them, when one is handed
     in — so a caller tidying several places animates them as a single motion
-    instead of nine of them one after another.
+    instead of nine of them one after another. `claims` works the same way
+    and for the same reason: handed a dict, the slots are written into it and
+    the caller writes the file once, instead of one read and one write here
+    per district in what was supposed to be a single pass.
     """
     wins = district(st, place)
     front, deck = wins[:DECK], wins[DECK:]
     slots, width, height = grid(place, front, aspect)
-    claims = read_claims()
+    owned = read_claims() if claims is None else claims
     mine = [] if plan is None else plan
     for w, (x, y) in zip(front, slots):
         mine.append((w["id"], tuple(w["position"]), (x, y)))
         w["position"] = [int(round(x)), int(round(y))]
-        claims[w["id"]] = place.n     # tidied here, so it belongs here
+        owned[w["id"]] = place.n      # tidied here, so it belongs here
 
     # The stack, off the block's bottom-right corner: each one a step further
     # back than the last, so it reads as a pile rather than a pixel.
@@ -937,8 +959,9 @@ def tidy(d, st, place, aspect, plan=None):
         y = place.y - height / 2.0 + ah / 2.0 - i * DECK_STEP
         mine.append((w["id"], tuple(w["position"]), (x, y)))
         w["position"] = [int(round(x)), int(round(y))]
-        claims[w["id"]] = place.n
-    write_claims(st, claims)
+        owned[w["id"]] = place.n
+    if claims is None:
+        write_claims(st, owned)
 
     plate = plate_of(st, place)
     if plate:
@@ -2316,12 +2339,19 @@ def cmd_first_light(args):
     except OSError:
         return
     d = Drift()
-    # The session is still assembling around us — plates, bars, the home
-    # terminal. Wait for home to exist before framing it, briefly.
+    # The session is still assembling around us. What it used to wait for was
+    # the terminal that opened on Earth; nothing opens one now, and counting
+    # name plates instead coupled this loop to the exact roster of another
+    # file's autostart — one the user is invited to edit. So it waits for the
+    # assembling itself to be over: when nothing new has mapped for a full
+    # second, whatever this session spawns has spawned.
     deadline = time.time() + 12.0
+    was, still = -1, 0
     while time.time() < deadline:
-        st = d.state()
-        if any(w.get("app_id") == "home-term" for w in st.get("windows", [])):
+        n = len(d.state().get("windows", []))
+        still = still + 1 if n == was else 0
+        was = n
+        if still >= 4:                # a second with no new arrivals
             break
         time.sleep(0.25)
     time.sleep(0.6)                       # let driftwm place what just mapped
@@ -2398,7 +2428,7 @@ def homes():
     found = {}
     for app, where in want.items():
         p = find_place(where)
-        if p is not None:
+        if p is not None and p is not SUN:   # nothing lives on the Sun
             found[str(app).lower()] = p
     return found
 
@@ -2528,15 +2558,19 @@ def cmd_arrange(args):
     ow, oh = screen(st)
     where = args[0] if args else None
     if where in ("all", "*"):
-        places = PLACES
+        places = PLANETS               # the Sun holds nothing to lay out
     else:
         p = find_place(where) if where else nearest(*d.camera())[0]
         if not p:
             sys.exit("sol arrange: unknown place")
+        if p is SUN:
+            sys.exit("sol arrange: the Sun holds nothing — it is home base")
         places = [p]
+    claims = read_claims()
     plan = []
     for p in places:
-        tidy(d, st, p, ow / oh, plan)
+        tidy(d, st, p, ow / oh, plan, claims)
+    write_claims(st, claims)          # once, with every slot now spoken for
     glide(d, plan)                    # every district settles as one motion
     spotlight(d, st)
     write_plates(st)
@@ -2682,6 +2716,8 @@ def cmd_send(args):
     p = find_place(args[0])
     if not p:
         sys.exit("sol send: unknown planet")
+    if p is SUN:
+        sys.exit("sol send: the Sun holds nothing — send it to a planet")
     d = Drift()
     st = d.state()
     win = next((w for w in real_windows(st) if w.get("is_focused")), None)
@@ -2701,9 +2737,10 @@ def cmd_send(args):
     write_claims(st, claims)
     recount(st)                            # it has a new home; work it out again
     plan = []
-    tidy(d, st, p, ow / oh, plan)
+    tidy(d, st, p, ow / oh, plan, claims)
     if was and was.n != p.n:
-        tidy(d, st, was, ow / oh, plan)    # and the district it left behind
+        tidy(d, st, was, ow / oh, plan, claims)   # and the one it left behind
+    write_claims(st, claims)
     plan = [(w, origin if w == win["id"] else a, b) for w, a, b in plan]
     glide(d, plan, arc=ARC if was and was.n != p.n else 0.0)
     spotlight(d, st)
@@ -2740,10 +2777,11 @@ def _resettle(d, st, wins, dst, others=()):
     write_claims(st, claims)
     recount(st)
     plan = []
-    tidy(d, st, dst, ow / oh, plan)
+    tidy(d, st, dst, ow / oh, plan, claims)
     for p in others:
         if p.n != dst.n:
-            tidy(d, st, p, ow / oh, plan)
+            tidy(d, st, p, ow / oh, plan, claims)
+    write_claims(st, claims)
     plan = [(wid, origins.get(wid, a), b) for wid, a, b in plan]
     glide(d, plan, arc=ARC)
     spotlight(d, st)
@@ -2754,16 +2792,24 @@ def _resettle(d, st, wins, dst, others=()):
 def cmd_gather(args):
     """Bring every adrift window in — nothing on this canvas is ever lost.
 
-    To the Sun unless you name a place, because the Sun is the inbox: the
-    one place with no role to contaminate. Never automatic — the covenant
-    on cameras extends to windows — so this is the verb you say when the
-    bar's "adrift" count should be zero again.
+    To home unless you name a place. The Sun was the inbox once, on the
+    reasoning that it is the one place with no role to contaminate — but the
+    Sun holds nothing now, and an inbox has to be somewhere things can be
+    left. Earth is what "home" means here, and the pairing reads: gather to
+    home, sweep to the archive. Never automatic — the covenant on cameras
+    extends to windows — so this is the verb you say when the bar's "adrift"
+    count should be zero again.
     """
     d = Drift()
     st = d.state()
-    dst = find_place(args[0]) if args else SUN
+    # The Earth fallback is how every other reader of "home" guards the role
+    # column being edited — and here it also keeps the error message honest:
+    # the only way `dst` is None is that a place was actually named.
+    dst = find_place(args[0]) if args else (find_place("home") or PLANETS[2])
     if not dst:
         sys.exit("sol gather: unknown place '%s'" % args[0])
+    if dst is SUN:
+        sys.exit("sol gather: the Sun holds nothing — gather to a planet")
     lost = adrift(st)
     if not lost:
         print("nothing adrift")
@@ -2789,6 +2835,8 @@ def cmd_sweep(args):
     dst = find_place(args[1]) if len(args) > 1 else find_place("archive")
     if not dst:
         sys.exit("sol sweep: unknown place '%s'" % args[1])
+    if src is SUN or dst is SUN:
+        sys.exit("sol sweep: the Sun holds nothing — name planets")
     over = district(st, src)[DECK:]
     if not over:
         print("nothing stacked at %s" % src.name)
@@ -2807,6 +2855,37 @@ def cmd_sweep(args):
 # Sol's own moves arrive on the same stream and look exactly like a drag,
 # which is what the `moving` lock is for.
 SETTLE = 0.20          # nothing has moved for this long, so the drag is over
+
+# ── And catching a birth ──────────────────────────────────────────────────
+# driftwm puts a toplevel on the canvas in `new_toplevel`, which is before the
+# client has committed a buffer: "size unknown until first commit", says the
+# comment there, and until that commit the window's geometry is a placeholder
+# a few pixels across sitting at the middle of the screen. It is announced on
+# the event stream in that state.
+#
+# Laying a district out around that is the bug this exists to prevent, and it
+# is worth spelling out because the damage does not look like its cause. The
+# newcomer gets a cell four pixels wide, so it lands on top of its neighbour
+# rather than beside it; the card is drawn around a district four pixels wider
+# than it was, so the window that appears a frame later hangs outside the very
+# rectangle the card exists to say it is inside; and neither is ever put right,
+# because the real size arrives inside the glide's own COOLDOWN, where the
+# watcher is deliberately deaf to what it takes to be its own moves.
+#
+# So a window is left alone until it has hatched: a size a client has actually
+# asked for, and one that has stopped changing. HATCHED is the floor — the
+# placeholder is single digits and no real window is anywhere near it, so the
+# test is "has anybody committed anything yet" rather than a guess at how
+# small a window may be. HATCH is the quiet after it, which costs a fifth of a
+# second before the district closes over a new terminal and buys correctness
+# for clients that commit twice: a default size first, then the real one.
+HATCHED = 32           # smaller than this in either axis: no buffer yet
+HATCH = 0.20           # and the size must hold still this long
+# Some windows really are that small — a one-row utility terminal is twenty
+# pixels tall and done growing. Past this, a nonzero size is taken at its
+# word: better to file a thin window late than to leave it unfiled forever,
+# which is what a floor with no fallback would do.
+HATCH_LIMIT = 1.0
 
 
 class Stream:
@@ -2879,27 +2958,101 @@ def send_home(d, st, w, where):
     return True                       # dealt with; nobody else need tidy it
 
 
-def settle_in(d, st, w):
-    """A window has just opened somewhere: fold it into that district's grid.
+def relay(d, st, places, claims=None, origins=None, arc=0.0):
+    """Re-lay districts as one motion, then tell the plates and the cards.
 
-    Without this a new terminal lands wherever the cursor was and the tidy
-    district you were looking at becomes a tidy district with one window
-    sitting across it. The grid is the district's resting state, so returning
-    to it is not a rearrangement — it is the district closing over what just
-    arrived.
+    The one ritual every change of membership ends in, written once so that
+    births, deaths, drops and drifts cannot drift apart — they had, in four
+    hand-rolled copies that already disagreed about recounting and plates.
+    The claims are written before the layout is computed, because membership
+    is read back from the file, and again after, because tidy speaks for the
+    slots it hands out. `origins` substitutes where a move animates *from*
+    (a carried window crosses from where it was born, not from the teleport
+    that filed it), and `arc` bows those crossings away from the Sun.
     """
-    place = belongs_to(w, read_claims())
-    if place is None:
-        return False                  # born in deep space; `sol gather` is for that
     ow, oh = screen(st)
+    owned = read_claims() if claims is None else claims
+    write_claims(st, owned)
     recount(st)
-    tidy(d, st, place, ow / oh)
+    with moving():
+        plan = []
+        for place in places:
+            tidy(d, st, place, ow / oh, plan, owned)
+        write_claims(st, owned)
+        if origins:
+            plan = [(wid, origins.get(wid, a), b) for wid, a, b in plan]
+        glide(d, plan, arc=arc)
     # The card is how a district says how big it is, so it has to be told the
-    # grid just grew. Without this the window is filed correctly and *looks*
+    # grid just changed. Without this a window is filed correctly and *looks*
     # like it is not: it sits outside the rounded card that is supposed to
     # contain it, which is the one thing the card exists to deny.
     write_plates(st)
     write_cards(d, st)
+
+
+def settle_in(d, ids, where, closed=()):
+    """Windows have opened or closed: fold the change into the districts.
+
+    Births and deaths arrive at the same door because they ask for the same
+    work — a district that gained a window must close over it, and one that
+    lost a window must close the gap — and a beat that carries both, which is
+    what an app restarting looks like, should re-lay the union once rather
+    than once per direction. `closed` is place numbers, not window ids,
+    because by the time this runs the dead windows cannot be asked anything.
+
+    Returns True when the canvas work is done. In a mode it is not: `remode`
+    lays what you can see, a canvas re-lay would fight it for the same
+    windows, and the caller keeps the closed districts for the beat after
+    the mode ends. What cannot wait is the carrying — a home is a promise
+    about where an app starts, mode or no mode — so that still happens
+    before the early return.
+
+    A list rather than a window, because they arrive together more often than
+    you would think — a session restoring, one launcher opening three things —
+    and a journey apiece means a glide and a shader reload apiece, each one
+    starting from where the last had not finished putting things.
+    """
+    if mode_now():
+        if where and ids:
+            st = d.state()
+            want = set(ids)
+            for w in real_windows(st):
+                if w["id"] in want:
+                    send_home(d, st, w, where)
+        return False
+    st = d.state()
+    want = set(ids)
+    fresh = [w for w in real_windows(st) if w["id"] in want]
+    claims = read_claims()
+    # From 1: a claim on the Sun is either an old claims file or a hand-edited
+    # one, and either way it names a place that does not hold windows.
+    places = {n: PLACES[n] for n in closed if 1 <= n < len(PLACES)}
+    named, origins = [], {}
+    for w in fresh:
+        p = home_of(w, where) if where else None
+        at = tuple(w["position"])
+        if p is not None and math.hypot(at[0] - p.x, at[1] - p.y) > DISTRICT:
+            # Carried to the place its app lives — but as part of this pass's
+            # one motion, on the arc a drag would take, not a journey of its
+            # own with its own glide and its own reload at the end of it.
+            origins[w["id"]] = at
+            d.move(w["id"], p.x, p.y)
+            w["position"] = [p.x, p.y]
+            claims[w["id"]] = p.n
+            place = p
+            footer("%s → %d %s" % (str(w.get("app_id"))[:20], p.n, p.name))
+        else:
+            place = belongs_to(w, claims)
+            if place is None:
+                continue              # born in deep space; `sol gather` is for that
+        places[place.n] = place
+        named.append(str(w.get("app_id"))[:20])
+    if not places:
+        return True
+    relay(d, st, places.values(), claims, origins,
+          arc=ARC if origins else 0.0)
+    if named:
+        footer("%s arrived · mod+a" % ", ".join(named[:3]))
     return True
 
 
@@ -3029,6 +3182,17 @@ def cmd_watch(args):
     seen, unsettled, lift, focused = {}, {}, set(), None
     beat = 0.0
 
+    # Windows driftwm has announced but that have not hatched yet:
+    # {id: (size, when it became that size)}. Ripeness is decided on the outer
+    # loop rather than here, because the last state a new window appears in is
+    # usually the last state for a while — a window that has finished settling
+    # on a size generates no further events to be noticed in.
+    hatching = {}
+    # Districts that have lost a window and not yet been closed over, held as
+    # place numbers rather than window ids because by the time the tidy runs
+    # the windows are gone and nothing can be asked where they were.
+    orphaned = set()
+
     # Which apps live where, and which windows were already here. Read once:
     # this loop must not grow a file read per event, and a home is the kind of
     # thing you set and forget. `known` is primed from the canvas as it stands
@@ -3056,33 +3220,12 @@ def cmd_watch(args):
             for w in real_windows(st):
                 wid, big = w["id"], tuple(w["size"])
                 if wid not in known:
-                    # A window is announced before it has a size: the state
-                    # that first mentions it says 0x0, and the real size
-                    # follows about a frame later. Settling on that lays the
-                    # grid out around a window of no width — the block picks
-                    # the wrong shape, and the card is drawn too small for
-                    # what is about to appear inside it. So let it go by; the
-                    # next state carries the same window with its size, and
-                    # this branch is what it will find then.
-                    if big[0] <= 0 or big[1] <= 0:
-                        continue
-                    known.add(wid)
-                    sizes[wid] = big
-                    try:
-                        if not (where and send_home(act, st, w, where)):
-                            # A window opening into a mode is not settled onto
-                            # the canvas: `settle_in` tidies the district into
-                            # its grid, which would pull every tile off the
-                            # screen so that the new one could be filed behind
-                            # them. The re-lay below puts it on the screen
-                            # instead, which is where you were looking.
-                            if mode_now():
-                                pass
-                            elif settle_in(act, st, w):
-                                footer("%s arrived · mod+a" %
-                                       str(w.get("app_id"))[:20])
-                    except Exception as e:
-                        shrug("settling the new window %d" % wid, e)
+                    # Not ours to lay out until it has hatched — see HATCHED.
+                    # Every size it passes through on the way restarts the
+                    # clock, so the one we finally settle around is the one it
+                    # came to rest at.
+                    if hatching.get(wid, (None, 0.0))[0] != big:
+                        hatching[wid] = (big, now)
                     continue
                 was = sizes.get(wid)
                 sizes[wid] = big
@@ -3114,13 +3257,47 @@ def cmd_watch(args):
                 continue
             for w in real_windows(st):
                 wid, at = w["id"], tuple(w["position"])
+                if wid not in known:
+                    # Still hatching: driftwm centres a newborn and moves it
+                    # again once it knows how big it is, and neither of those
+                    # is a drag. Tracking them here put the drop clock and the
+                    # hatch clock — the same fifth of a second each — in a
+                    # race the drop clock could win, and `settle` would file a
+                    # window nobody had touched around its placeholder size.
+                    continue
                 was = seen.get(wid)
                 if was is None or at != was[0]:
                     seen[wid] = (at, now)
                 if was is not None and at != was[0]:
                     unsettled[wid] = at
+
+        # Windows that have closed. Worked out once against the newest state
+        # rather than per event, because a drag delivers ninety a second and
+        # none of them is a closure.
+        if states:
+            live = {w["id"] for w in real_windows(states[-1])}
+            gone = [wid for wid in known if wid not in live]
+            for wid in gone:
+                known.discard(wid)
+                # Every record this loop keeps is keyed by window id, and a
+                # session that opens and closes windows all day would otherwise
+                # carry every one of them until it ends.
+                sizes.pop(wid, None)
+                seen.pop(wid, None)
+                unsettled.pop(wid, None)
+                lift.discard(wid)
+            if gone:
+                # Where they were, asked now rather than when the tidy runs:
+                # the claims file is the record of it, and the first tidy after
+                # this prunes the dead out of it.
+                claims = read_claims()
+                orphaned |= {claims[wid] for wid in gone if wid in claims}
+            for wid in [k for k in hatching if k not in live]:
+                hatching.pop(wid, None)        # closed before it ever hatched
+
         if moving.busy():
             continue
+
         for wid in [k for k in list(unsettled)
                     if now - seen.get(k, (None, now))[1] >= SETTLE]:
             unsettled.pop(wid, None)
@@ -3134,6 +3311,29 @@ def cmd_watch(args):
                 raise_up(act, wid)
             except Exception as e:
                 shrug("raising window %d" % wid, e)
+
+        # Births and deaths, once sol's own motion has finished — both re-lay
+        # a district, so neither may run into the middle of a glide, and a
+        # beat that carries both hands them to `settle_in` as one pass.
+        ripe = [wid for wid, (big, when) in hatching.items()
+                if (min(big) >= HATCHED and now - when >= HATCH)
+                or (min(big) > 0 and now - when >= HATCH_LIMIT)] \
+            if hatching else []
+        for wid in ripe:
+            sizes[wid] = hatching.pop(wid)[0]
+            known.add(wid)
+            unsettled.pop(wid, None)
+        if ripe or orphaned:
+            closed = sorted(orphaned)
+            orphaned = set()
+            try:
+                if not settle_in(act, ripe, where, closed=closed):
+                    # A mode is on. The births are remode's to show and their
+                    # homes have been honoured; the closed districts keep,
+                    # for the first beat after the mode ends.
+                    orphaned = set(closed)
+            except Exception as e:
+                shrug("settling %s" % (ripe or closed), e)
 
         # A mode describes a district, so a district that has gained or lost a
         # window is a mode that has to be drawn again. Cheap to ask: `remode`
@@ -3206,7 +3406,7 @@ def settle(d, wid):
     aspect = ow / oh
     claims = read_claims()
     home = claims.get(wid)
-    was = PLACES[home] if home is not None and 0 <= home < len(PLACES) else None
+    was = PLACES[home] if home is not None and 1 <= home < len(PLACES) else None
 
     # Did it leave? The card is the answer, not the nearest planet centre.
     #
@@ -3226,18 +3426,13 @@ def settle(d, wid):
         reorder(d, st, was, wid, drop, aspect)
         return
 
-    place, dist = nearest(*drop)
+    place, dist = lands_on(*drop)
     if dist > DISTRICT:                    # left in open space: it is adrift
         claims.pop(wid, None)
-        write_claims(st, claims)
         if was:
-            with moving():
-                recount(st)
-                plan = []
-                tidy(d, st, was, aspect, plan)
-                glide(d, plan)
-            write_plates(st)
-            write_cards(d, st)
+            relay(d, st, [was], claims)
+        else:
+            write_claims(st, claims)
         return
 
     if was and was.n == place.n:
@@ -3255,11 +3450,7 @@ def reorder(d, st, place, wid, drop, aspect):
                       for w in wins if w["id"] == wid])
         return
     put_at(st, place, wid, slot_for(place, wins, drop, aspect))
-    with moving():
-        plan = []
-        tidy(d, st, place, aspect, plan)
-        glide(d, plan)
-    write_cards(d, st)
+    relay(d, st, [place])
 
 
 def handoff(d, st, place, wid, drop, aspect, was):
@@ -3912,8 +4103,9 @@ def menu_items(here, n, standing):
                         "mod+%s" % (0 if here is SUN else here.n),
                         ["sol", "goto", token]))
         if n:
-            out.append(("item", "Tidy %s" % ("the Sun" if here is SUN else "this planet"),
-                        "mod+a", ["sol", "arrange", token]))
+            # Only ever a planet: the Sun holds nothing, so `n` is zero there.
+            out.append(("item", "Tidy this planet", "mod+a",
+                        ["sol", "arrange", token]))
             out.append(("item", "Step through its windows", "mod+n",
                         ["sol", "next", token]))
     out.append(("item", "New terminal here", "mod+⏎", ["foot", "-c", FOOT_INI]))
@@ -3960,17 +4152,17 @@ POWER = {
 
 
 def machine():
-    """Who and what — the line an About box would carry."""
+    """Who and what — the line an About box would carry.
+
+    sol's version, not driftwm's. This is sol's menu, on sol's bar, and the
+    number you want when something here misbehaves is the number of the thing
+    that drew it. driftwm's own version is one `driftwm --version` away and
+    `sol doctor` prints both — which is also why this no longer shells out for
+    it: the ☉ menu opens on a click, and a subprocess with a one-second
+    timeout was a second of nothing happening on a machine that was busy.
+    """
     who = "%s@%s" % (os.environ.get("USER") or "you", socket.gethostname())
-    what = "driftwm"
-    try:
-        import subprocess
-        said = subprocess.run(["driftwm", "--version"], capture_output=True,
-                              text=True, timeout=1).stdout.split()
-        what = " ".join(said[:2]) or what
-    except (OSError, subprocess.SubprocessError):
-        pass                    # not on PATH, or too slow to answer: say driftwm
-    return "%s  ·  %s" % (who, what)
+    return "%s  ·  sol %s" % (who, VERSION)
 
 
 def system_items():

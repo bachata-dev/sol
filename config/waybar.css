@@ -81,7 +81,8 @@ window#waybar {
 #pulseaudio,
 #network,
 #tray,
-#custom-overview {
+#custom-overview,
+#custom-help {
   color: #737aa2;
   padding: 0 7px;
 }
@@ -104,6 +105,17 @@ window#waybar {
   padding: 0 10px;
 }
 
+/* The keybinding card, in the corner help has always lived in. A question
+   mark carries itself at the weight of the text around it, so it takes the
+   monospace face rather than the symbol one and sits a shade brighter than
+   the status glyphs — it is an offer, not a reading. */
+#custom-help {
+  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  color: #8a91b4;
+  padding: 0 9px;
+}
+
 /* The clock sits last, as it does on every Mac, and in the plain foreground —
    it is the one thing you read without being told to. */
 #clock {
@@ -119,6 +131,7 @@ window#waybar {
 #custom-holding:hover,
 #custom-strip:hover,
 #custom-overview:hover,
+#custom-help:hover,
 #pulseaudio:hover,
 #network:hover,
 #clock:hover {

@@ -21,7 +21,7 @@
   "modules-center": ["custom/p1", "custom/p2", "custom/p3", "custom/p4",
                      "custom/belt",
                      "custom/p5", "custom/p6", "custom/p7", "custom/p8"],
-  "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray", "custom/overview", "clock"],
+  "modules-right": ["cpu", "memory", "pulseaudio", "network", "tray", "custom/overview", "custom/help", "clock"],
 
   // The ☉ sits where  sits, so it opens what  opens: lock, sleep,
   // restart, shut down, log out — the machine, not the canvas. Right-click
@@ -84,6 +84,16 @@
     "format": "▦",
     "on-click": "sol-map",
     "tooltip": false
+  },
+
+  // The keybinding card, next to the clock — the corner every desktop's help
+  // lives in, and the one place a person looks when they have forgotten the
+  // key that would have told them. It toggles: the same click puts it away,
+  // exactly as mod+/ does, so the button is never a one-way door.
+  "custom/help": {
+    "format": "?",
+    "on-click": "sol-help",
+    "tooltip-format": "Keybindings  ·  mod+/"
   },
 
   // Percentages, because a bare number in a menu bar is just noise.

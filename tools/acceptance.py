@@ -81,6 +81,9 @@ MODULES = ("/usr/lib/sol/solmod.py", "/usr/local/lib/sol/solmod.py")
 MODULE = next((m for m in MODULES if os.path.exists(m)), MODULES[-1])
 
 
+MOD = None             # the loaded module, for the helpers that outrank a param
+
+
 def load_sol():
     """The installed sol, as a module, for the parts worth testing directly.
 
@@ -89,21 +92,53 @@ def load_sol():
     want the code, not the doorway — but they fall back to the doorway, so
     that a tree installed the old way still runs them.
     """
+    global MOD
     where = MODULE if os.path.exists(MODULE) else SOL
     loader = importlib.machinery.SourceFileLoader("sol_mod", where)
     spec = importlib.util.spec_from_loader("sol_mod", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
+    MOD = mod
     return mod
 
 
+def quiet(cap=6.0):
+    """Wait until sol has stopped moving things, or give up and say nothing.
+
+    A window is not where it belongs the moment it opens: the watcher waits
+    for it to hatch — driftwm announces a toplevel before its client has
+    committed a size — and then glides the district closed over it. Anything
+    that moves a window while that glide is in flight is overwritten by the
+    next frame of it, so a group that spawns a terminal and immediately flings
+    it into deep space is racing sol rather than testing it.
+
+    Waiting on the clock is the coin toss `stock` already complains about, so
+    this waits on the stamp sol keeps while it is moving. The cap is there
+    because a suite that hangs teaches nothing either. MOD is always loaded
+    by the time any test helper runs — main() loads it before the first
+    group — so there is deliberately no clock fallback here.
+    """
+    until = time.time() + cap
+    while time.time() < until:
+        if not MOD.moving.busy():
+            return
+        time.sleep(0.1)
+
+
 def spawn(n, settle=0.6):
-    """n terminals on the canvas, and the ids they arrived as."""
+    """n terminals on the canvas, and the ids they arrived as.
+
+    Back only once they have been settled onto their district — see `quiet`.
+    """
     before = {w["id"] for w in state().get("windows", [])}
     for _ in range(n):
         msg("action", "spawn", "foot")
         time.sleep(0.35)
+    # `settle` alone: every caller's value already clears the hatch window,
+    # and deriving a lower bound from MOD.HATCH here both never won the max
+    # and crashed the suite against an installed sol old enough to lack it.
     time.sleep(settle)
+    quiet()
     after = state().get("windows", [])
     fresh = [w["id"] for w in after if w["id"] not in before]
     _spawned.extend(fresh)
@@ -270,8 +305,14 @@ def test_districts(mod):
     st = state()
     check("nothing is adrift after gather", len(mod.adrift(st)) == 0,
           [w["id"] for w in mod.adrift(st)])
-    check("the gathered window is on the Sun",
-          victim in windows_of(st, 0, mod), windows_of(st, 0, mod))
+    # Home, not the Sun. The Sun holds nothing — it is the view the whole
+    # inner system sits in, and an inbox has to be somewhere things can be
+    # left, so gather's default moved to the planet whose role is "home".
+    home = mod.find_place("home")
+    check("the gathered window is at home (%s)" % home.name,
+          victim in windows_of(st, home.n, mod), windows_of(st, home.n, mod))
+    check("and nothing at all is on the Sun",
+          not windows_of(st, 0, mod), windows_of(st, 0, mod))
 
 
 # ── 6. arrange lays a grid that does not overlap ──────────────────────────
@@ -1082,6 +1123,152 @@ def test_mode_exclusive(mod):
           (r.stdout + r.stderr)[:160])
 
 
+# ── 19. the canvas district follows what opens and closes on it ───────────
+def card_of(mod, n):
+    """The rectangle the shader currently has for a district.
+
+    Read back rather than recomputed, because the failure this group exists
+    for was a card that disagreed with the windows it was drawn around — and
+    a check against `bounds` alone would have agreed with itself and passed.
+    Shader space is the canvas with y negated; this hands back canvas.
+    """
+    try:
+        src = open(mod.SHADER).read()
+        block = src.split(mod.CARD_HEAD)[1].split(mod.CARD_TAIL)[0]
+    except (OSError, IndexError):
+        return None
+    for line in block.splitlines():
+        if line.startswith("const vec4 D%d " % n):
+            nums = [float(v) for v in
+                    line.partition("vec4(")[2].partition(")")[0].split(",")]
+            return nums[0], -nums[1], nums[2], nums[3]
+    return None
+
+
+def off_grid(mod, place, wins, aspect):
+    """Windows that are not standing on the slot the grid gives them."""
+    slots, _, _ = mod.grid(place, wins[:mod.DECK], aspect)
+    return [(w["id"], tuple(w["position"]), s)
+            for w, s in zip(wins, slots)
+            if abs(w["position"][0] - s[0]) > 2 or abs(w["position"][1] - s[1]) > 2]
+
+
+def outside(card, wins):
+    """Windows the card does not contain — the thing a card exists to deny."""
+    if not card:
+        return [w["id"] for w in wins]
+    cx, cy, hx, hy = card
+    return [w["id"] for w in wins
+            if abs(w["position"][0] - cx) + w["size"][0] / 2.0 > hx + 1
+            or abs(w["position"][1] - cy) + w["size"][1] / 2.0 > hy + 1]
+
+
+def same_box(card, box):
+    """Does the shader's card agree with the district it was drawn around?
+
+    A tenth of a unit, because that is what `write_cards` prints to.
+    """
+    return card is not None and box is not None \
+        and all(abs(a - b) <= 0.1 for a, b in zip(card, box))
+
+
+def close_down_to(mod, place, wins, want):
+    """Close windows off a district until `want` are left, and wait for it.
+
+    Asked of the canvas rather than the clock: a client is closed when it says
+    so, and the tidy that follows is a glide that takes as long as the distance
+    it covers.
+    """
+    for w in wins[want:]:
+        msg("close", "--id", str(w["id"]))
+        time.sleep(0.4)
+    for _ in range(24):
+        st = state()
+        if len(mod.assignment(st).get(place.n, [])) <= want:
+            break
+        time.sleep(0.3)
+    time.sleep(0.3)                        # let the closing-over *start*...
+    quiet()                                # ...and wait on the stamp, not the clock
+    return state()
+
+
+def test_settling(mod):
+    print("\n19. a district closes over what arrives and what leaves")
+    sol("mode", "off")
+    time.sleep(1.0)
+    ensure_watcher()
+    reset_canvas()
+    place = mod.PLANETS[3]                     # Mars: ops, and nobody else's
+    sol("goto", "4")
+    time.sleep(1.8)
+
+    # A window is announced before its client has committed a buffer, at a
+    # placeholder size a few pixels across. Laying the district out around
+    # that gave the newcomer a cell four pixels wide and drew the card to
+    # match — so these checks are about the size sol waited for, not the size
+    # it was first told.
+    spawn(1, settle=2.5)
+    st = state()
+    wins = mod.assignment(st).get(place.n, [])
+    if not check("a terminal arrived on Mars", len(wins) == 1, len(wins)):
+        return
+    ow, oh = mod.screen(st)
+    check("it landed on the grid rather than where it opened",
+          not off_grid(mod, place, wins, ow / oh),
+          off_grid(mod, place, wins, ow / oh))
+    check("the card closed over it",
+          not outside(card_of(mod, place.n), wins),
+          "card %s, window %s at %s" % (card_of(mod, place.n),
+                                        wins[0]["size"], wins[0]["position"]))
+
+    # Three more, one after another: the district grows a row and the card
+    # has to grow with it.
+    spawn(3, settle=3.0)
+    time.sleep(1.5)
+    st = state()
+    wins = mod.assignment(st).get(place.n, [])
+    if not check("Mars is holding four", len(wins) == 4, len(wins)):
+        return
+    check("every one of them is on the grid",
+          not off_grid(mod, place, wins, ow / oh),
+          off_grid(mod, place, wins, ow / oh))
+    check("and the card holds all four",
+          not outside(card_of(mod, place.n), wins),
+          "card %s" % (card_of(mod, place.n),))
+    grown = card_of(mod, place.n)
+
+    # And the other half. A district that loses a window must close the gap
+    # and let the card come back in, or it is a grid with a hole in it under
+    # a card that is bigger than what it holds.
+    #
+    # Losing one of four is the quieter half of that: the block keeps both its
+    # rows, so the card is entitled not to move, and what is checked is that it
+    # still says exactly what the windows say. Going down to one is the loud
+    # half, where a card that did not shrink is visible from across the room.
+    st = close_down_to(mod, place, wins, 3)
+    wins = mod.assignment(st).get(place.n, [])
+    if not check("one of them closed", len(wins) == 3, len(wins)):
+        return
+    check("the survivors closed the gap",
+          not off_grid(mod, place, wins, ow / oh),
+          off_grid(mod, place, wins, ow / oh))
+    check("and the card still says what the district says",
+          same_box(card_of(mod, place.n), mod.bounds(st, place)),
+          "card %s, district %s" % (card_of(mod, place.n),
+                                    mod.bounds(st, place)))
+
+    st = close_down_to(mod, place, wins, 1)
+    wins = mod.assignment(st).get(place.n, [])
+    if not check("all but one closed", len(wins) == 1, len(wins)):
+        return
+    shrunk = card_of(mod, place.n)
+    check("and the card came back in with them",
+          shrunk and grown and shrunk[2] < grown[2] and shrunk[3] < grown[3],
+          "was %s, now %s" % (grown, shrunk))
+    check("with what is left still inside it",
+          not outside(shrunk, wins), "card %s" % (shrunk,))
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -1094,7 +1281,7 @@ def main():
         ("verbs", test_new_verbs), ("homes", test_homes_routing),
         ("geometry", test_mode_geometry), ("paint", test_mode_paint),
         ("focus", test_focus_live), ("follows", test_mode_follows),
-        ("exclusive", test_mode_exclusive),
+        ("exclusive", test_mode_exclusive), ("settling", test_settling),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))

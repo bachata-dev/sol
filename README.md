@@ -46,6 +46,9 @@ Those roles are only defaults; what matters is that "further out" always means "
 I'm doing right now".
 
 `mod+0` always comes back here — the Sun, home base, with Mercury a hop away and Earth just below.
+The Sun is the one place that holds nothing: it is the view with the whole inner system in it, and a
+window parked there would be in the way of every arrival and every departure. Windows live on the
+eight planets, and a window put down at the origin belongs to Mercury.
 
 ![the Sun, and the inner system](screenshots/sun.png)
 
@@ -551,7 +554,7 @@ sol send 8        # send the focused window to Neptune; `--stay` to not follow
 sol back          # the camera to where it was before the last flight (it toggles)
 sol find          # fly to a window by name, wherever it is; `sol find slack` skips the menu
 sol tidy          # gather the lost, arrange every planet, sweep the overgrown — one verb
-sol gather        # bring every adrift window in; `sol gather 8` files them on Neptune
+sol gather        # bring every adrift window in, to home; `sol gather 8` files them on Neptune
 sol sweep         # drain this planet's stack to the archive; `sol sweep 5 2` names both
 sol homes         # which app lives on which planet
 sol tour          # a narrated first flight; touch anything and it yields

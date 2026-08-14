@@ -51,8 +51,10 @@ autostart = [
   "foot -W 40x1 -a planet-label-6 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=e6cfa1 -e sh ~/.config/driftwm/label.sh 6 SATURN media",
   "foot -W 40x1 -a planet-label-7 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=7dcfff -e sh ~/.config/driftwm/label.sh 7 URANUS spare",
   "foot -W 40x1 -a planet-label-8 -o main.font='JetBrains Mono:size=36' -o colors.alpha=0.0 -o colors.foreground=7477e0 -e sh ~/.config/driftwm/label.sh 8 NEPTUNE archive",
-  # a terminal on Earth, so the first thing you see is home
-  "foot -c ~/.config/driftwm/foot.ini -a home-term",
+  # No terminal here. A session used to open one on Earth so that the first
+  # thing you saw was home — but a window you did not ask for is a window you
+  # have to close, every single login, and an empty system says "home" better
+  # than somebody else's shell prompt does. mod+return is one key away.
 ]
 
 # ── OPT-IN EXTRAS ─────────────────────────────────────────────────────────
@@ -269,13 +271,9 @@ blur = true
 # that only its author can use. The strip earns its 28px by being the answer
 # to "how do I get rid of this".
 
-# The terminal that opens on Earth (home). Its own app_id, so it does not
-# inherit the `foot` rule above.
-[[window_rules]]
-app_id = "home-term"
-position = [-471, 2553]
-size = [1200, 720]
-blur = true
+# `home-term` is deliberately absent. Nothing spawns one any more (see
+# autostart), and a rule for a window that never opens is a rule that outlives
+# the reason for it.
 
 # Planet name plates. Deliberately NOT widgets: driftwm limits how far you can
 # zoom out to half the fit of real windows, so the name plates are what make
