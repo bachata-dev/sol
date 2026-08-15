@@ -604,7 +604,7 @@ sol sweep         # drain this planet's stack to the archive; `sol sweep 5 2` na
 sol homes         # which app lives on which planet
 sol tour          # a narrated first flight; touch anything and it yields
 sol doctor        # is this machine set up right? paste it into bug reports
-sol list          # what is where
+sol list          # what is where; --json for the same census as one object
 sol plate 3       # the line Earth's name plate is showing
 sol here          # where am I?
 sol menu          # the context menu, at the pointer
@@ -618,6 +618,40 @@ sol setup         # install the config into your home directory (after a .deb)
 sol --version     # which sol this is; `sol doctor` prints it too
 sol help          # the keybinding card
 ```
+
+## Drivable by agents
+
+The read commands answer in two voices. Prose is for a person at a prompt; add `--json` and the
+same census comes back as one object on stdout, for a script that has to act on the answer rather
+than read it:
+
+```sh
+sol list --json     # every window, grouped by planet, plus anything adrift
+sol here --json     # where the camera stands, what mode is on, who is calling
+sol homes --json    # which app is filed on which planet
+sol doctor --json   # every check with its status; `healthy` says it in one word
+```
+
+Nothing is decided twice: both voices are the same command reading the same state, so neither can
+drift from the other. `sol here --json` is the one worth polling — place, mode, window count and
+the call queue (urgent first, then oldest, the order `mod+s` flies) in a single answer.
+
+And the whole CLI is offered over the [Model Context Protocol](https://modelcontextprotocol.io):
+`sol-mcp` is a stdio MCP server in which every tool is one `sol` command run exactly as a keypress
+would run it — nothing in it knows how to move a window; it only knows how to ask. Register it
+with whatever speaks MCP; for Claude Code:
+
+```sh
+claude mcp add sol -- sol-mcp
+```
+
+Then the agent living on Mars can finish its refactor and say so — `signal` with `at: mars`, and
+the call crosses the canvas like every other call. An assistant told "set up my usual layout:
+agents on Mars, builds on Jupiter, comms on Venus" can read the census, find each window, carry it
+there and tidy up after itself — `list_windows`, `find_window`, `send_focused`, `arrange` — with
+every step the same motion a hand would have made, under the same rule everything here obeys: the
+camera moves only when asked. It is stdlib Python like the rest of sol, and it finds driftwm the
+way every sol command does, so it works wherever `sol` does.
 
 ## Where an app lives
 

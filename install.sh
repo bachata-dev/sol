@@ -85,7 +85,8 @@ printf '%s\n' '#!/usr/bin/env python3' \
   '    solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
 sudo chmod 755 /usr/local/bin/sol
 sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
-                   bin/sol-ripple bin/sol-session bin/driftwm-up /usr/local/bin/
+                   bin/sol-ripple bin/sol-session bin/sol-mcp \
+                   bin/driftwm-up /usr/local/bin/
 
 # The session a login screen offers, and the portal backends it uses. These
 # belong to the machine rather than to a person — every user picks sol from

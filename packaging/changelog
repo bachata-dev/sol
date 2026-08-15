@@ -1,3 +1,26 @@
+sol (1.4.0) unstable; urgency=medium
+
+  * Drivable by agents: the read commands answer in a machine voice too.
+    `sol list`, `sol here`, `sol homes` and `sol doctor` take `--json` and
+    return one object on stdout — the same census the prose describes, so
+    neither voice can drift from the other. `sol here --json` carries the
+    call queue, urgent first then oldest, the order mod+s flies.
+  * `sol-mcp`: the whole CLI offered over the Model Context Protocol, one
+    tool per verb, each run exactly as a keypress would run it — stdlib
+    only, stdio framing, registered with e.g. `claude mcp add sol -- sol-mcp`.
+    An agent can now put its own "done" on the planet it worked on, and an
+    assistant can lay out a desktop by asking sol rather than by guessing
+    at coordinates.
+  * The doorway does not fall over when a caller trips: a malformed call
+    is that call's error and the session keeps answering; a sweep
+    destination without a source is refused rather than silently draining
+    to the archive; the handshake claims only protocol revisions it was
+    actually written against; and a successful read answers with stdout
+    alone, so one stray warning can never break every agent's parse at
+    once.
+
+ -- sol <noreply@github.com>  Sat, 15 Aug 2026 18:00:00 +0000
+
 sol (1.3.0) unstable; urgency=medium
 
   * Signals: attention as light from a place. `sol signal` lets anything on

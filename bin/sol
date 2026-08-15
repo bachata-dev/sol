@@ -96,7 +96,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -609,6 +609,33 @@ def find_place(token):
         if t == str(p.n) or p.name.lower().startswith(t) or t == p.role:
             return p
     return None
+
+
+def want_json(args):
+    """Whether --json was asked for, taken out of the argument list.
+
+    The read commands answer in two voices: prose for a person at a prompt,
+    one JSON object on stdout for a script or an agent that has to act on
+    the answer rather than read it. Only the shape differs — both are the
+    same census, and neither says anything the other withholds.
+    """
+    if "--json" in args:
+        args.remove("--json")
+        return True
+    return False
+
+
+def place_json(p):
+    return {"n": p.n, "name": p.name, "role": p.role}
+
+
+def window_json(w):
+    """A window as a script wants it: identity, name, and where it sits."""
+    x, y = w.get("position") or (0, 0)
+    return {"id": w.get("id"), "app_id": w.get("app_id"),
+            "title": w.get("title") or "",
+            "focused": bool(w.get("is_focused")),
+            "position": [int(x), int(y)]}
 
 
 def nearest(x, y, among=PLACES):
@@ -2479,7 +2506,14 @@ def home_of(w, where):
 
 def cmd_homes(args):
     """Print what is filed where, and where it would go."""
+    as_json = want_json(args)
     where = homes()
+    if as_json:
+        print(json.dumps({fragment: place_json(p) for fragment, p in
+                          sorted(where.items(),
+                                 key=lambda kv: (kv[1].n, kv[0]))},
+                         indent=2))
+        return
     if not where:
         print("no homes set. Put them in %s:" % SOL_TOML)
         print("\n  [homes]\n  slack = 2          # by number\n"
@@ -4438,7 +4472,8 @@ def cmd_here(args):
     d = Drift()
     st = d.state()
     z = d.zoom()
-    place, on_it, n = whereabouts(st, d.camera(), z)
+    cam = d.camera()
+    place, on_it, n = whereabouts(st, cam, z)
     # No acknowledgement here: a one-shot process cannot tell an arrival
     # from a residence, and the heartbeat is exactly the caller that would
     # eat a call for the crime of the camera being parked near it.
@@ -4456,6 +4491,23 @@ def cmd_here(args):
 
     if "--waybar" in args:
         print(bar.split("\n")[0])
+    elif "--json" in args:
+        # The one answer an agent polls: where the camera stands, what mode
+        # is on, and who is calling — the same three facts the bar, the
+        # plates and mod+s are made of, in one object.
+        m = mode_now()
+        now = time.time()
+        calls = [dict(place_json(PLANETS[int(s["n"]) - 1]),
+                      text=s.get("text", ""), urgent=bool(s.get("urgent")),
+                      age=int(now - s.get("t", now)))
+                 for v in ringing.values() for s in v]
+        calls.sort(key=lambda c: (not c["urgent"], -c["age"]))  # as mod+s flies
+        print(json.dumps({
+            "place": place_json(place) if place and on_it else None,
+            "label": label, "role": role, "windows": n,
+            "camera": [round(cam[0]), round(cam[1])], "zoom": round(z, 4),
+            "mode": m.get("mode") if m else None,
+            "calls": calls}, indent=2))
     else:
         print("%s  (%s)%s" % (label, role, "  ·  " + windows_word(n) if n else ""))
 
@@ -4601,9 +4653,22 @@ def cmd_answer(args):
 
 
 def cmd_list(args):
+    as_json = want_json(args)
     d = Drift()
     st = d.state()
     total = len(real_windows(st))
+    if as_json:
+        # Every place, including the empty ones: a script keying on Earth
+        # should not have to discover that a quiet planet is a missing key.
+        places = []
+        for p in PLACES:
+            wins = district(st, p)
+            places.append(dict(place_json(p), count=len(wins),
+                               windows=[window_json(w) for w in wins]))
+        print(json.dumps({"places": places,
+                          "adrift": [window_json(w) for w in adrift(st)],
+                          "total": total}, indent=2))
+        return
     for p in PLACES:
         wins = district(st, p)
         if not wins:
@@ -5182,13 +5247,17 @@ def cmd_doctor(args):
     """
     import shutil
     import subprocess
+    as_json = want_json(args)
     OK, WARN, BAD = ("\033[38;2;158;206;106m✓\033[0m",
                      "\033[38;2;224;175;104m!\033[0m",
                      "\033[38;2;247;118;142m✗\033[0m")
-    sick = []
+    sick, checks = [], []
 
     def row(mark, text):
-        print("  %s %s" % (mark, text))
+        checks.append({"status": "ok" if mark == OK else
+                       "warn" if mark == WARN else "bad", "text": text})
+        if not as_json:
+            print("  %s %s" % (mark, text))
         if mark == BAD:
             sick.append(text)
 
@@ -5516,6 +5585,9 @@ def cmd_doctor(args):
             row(WARN, "%s adrift beyond every district — sol gather brings them home"
                 % windows_word(len(lost)))
 
+    if as_json:
+        print(json.dumps({"version": VERSION, "healthy": not sick,
+                          "checks": checks}, indent=2))
     if sick:
         sys.exit(1)
 
