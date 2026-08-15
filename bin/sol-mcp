@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""sol-mcp — sol's verbs, offered to agents over the Model Context Protocol.
+
+Everything here is a doorway and nothing is a room. Each tool is one `sol`
+command run exactly as a keypress would run it, which is the whole design:
+the CLI is already the one place every verb lives — the keybindings go
+through it, the menu goes through it, the footer's command line goes through
+it — so an agent that speaks to the CLI inherits every rule sol keeps,
+including the one that matters: the camera moves only when asked. Nothing
+in this file knows how to move a window. It only knows how to ask.
+
+What that buys an agent is the desktop as a place it can act in. The coding
+agent that just finished on Mars can say so — `signal` with `at: mars` —
+and the call crosses the canvas like every other call. An assistant told
+"set up my usual layout" can read the census (`list_windows`), find what it
+needs (`find_window`), carry it (`send_focused`), and tidy up after itself
+(`arrange`), with every step the same motion a hand would have made. The
+reads return the CLI's own `--json`, so there is no prose to scrape and no
+second format to keep true.
+
+The transport is MCP's stdio framing: one JSON-RPC message per line, in and
+out. The protocol surface is deliberately the floor — initialize, ping,
+tools/list, tools/call — because a wrapper this thin has nothing to say
+about resources, prompts or sampling, and claiming less is how you stay
+honest about what breaks. Stdlib only, like everything else in sol: an MCP
+server you have to pip-install a framework for is a dependency the rest of
+this project went out of its way not to have.
+
+Register it with whatever speaks MCP; for Claude Code that is
+
+    claude mcp add sol -- sol-mcp
+
+run inside the session (the server finds driftwm the way every sol command
+does: DRIFTWM_SOCKET first, then the socket named by WAYLAND_DISPLAY).
+"""
+
+import json
+import re
+import subprocess
+import sys
+
+PLACE = ("A planet by number (1-8), name (mercury, venus, earth, mars, "
+         "jupiter, saturn, uranus, neptune), or role (quick, comms, home, "
+         "ops, builds, media, spare, archive). 'sun' or 0 is the Sun — "
+         "home base, which holds no windows.")
+
+# The prose verbs answer through say(), which colours for a terminal; an
+# agent gets the words without the paint.
+ANSI = re.compile("\033\\[[0-9;]*m")
+
+# The MCP revisions this server has actually been written against, newest
+# first. The handshake answers with one of these and never anything else.
+PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+
+def s(**props):
+    """An inputSchema, with `required` read off the properties themselves."""
+    required = [k for k, v in props.items() if v.pop("required", False)]
+    schema = {"type": "object", "properties": props}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def sweep_args(a):
+    """`sol sweep [from] [to]` is positional, so a destination without a
+    source cannot be said — and quietly dropping it would drain the wrong
+    way and report success. Refusing is the honest translation."""
+    if a.get("to") and not a.get("place"):
+        raise ValueError("'to' needs 'place' — name the planet being drained")
+    return ["sweep"] + ([a["place"]] if a.get("place") else []) \
+                     + ([a["to"]] if a.get("to") else [])
+
+
+# name → (description, inputSchema, argv builder). The builder returns the
+# words after `sol`, exactly as a shell would have passed them.
+TOOLS = {
+    "where": (
+        "Where the camera stands, which mode is on, how many windows are "
+        "here, and which districts are calling (oldest and most urgent "
+        "first) — the one answer worth polling. Runs `sol here --json`.",
+        s(),
+        lambda a: ["here", "--json"]),
+    "list_windows": (
+        "The census: every window on the canvas grouped by the planet it "
+        "belongs to, every place listed even when empty, plus any windows "
+        "adrift in deep space. Runs `sol list --json`.",
+        s(),
+        lambda a: ["list", "--json"]),
+    "goto": (
+        "Fly the camera to a place. The flight is eased and visible, "
+        "exactly as the keybinding makes it; arriving at a district "
+        "answers its calls.",
+        s(place={"type": "string", "description": PLACE, "required": True}),
+        lambda a: ["goto", a["place"]]),
+    "system_view": (
+        "Pull back until the whole solar system is in frame — the map view.",
+        s(),
+        lambda a: ["system"]),
+    "back": (
+        "Return the camera to where it stood before the last flight. It "
+        "toggles, so calling it twice returns you.",
+        s(),
+        lambda a: ["back"]),
+    "find_window": (
+        "Fly to the first window matching a substring of its app id, title "
+        "or planet name, and focus it. Runs `sol find <query>`.",
+        s(query={"type": "string", "required": True,
+                 "description": "Matched case-insensitively against app id, "
+                                "title and planet name."}),
+        lambda a: ["find", a["query"]]),
+    "send_focused": (
+        "Send the focused window to a planet, on the same arc a drag would "
+        "take; its old district closes the gap and the new one makes room. "
+        "Focus a window first with find_window.",
+        s(place={"type": "string", "description": PLACE, "required": True},
+          stay={"type": "boolean",
+                "description": "Keep the camera here rather than follow."}),
+        lambda a: ["send", a["place"]] + (["--stay"] if a.get("stay") else [])),
+    "arrange": (
+        "Tidy a planet's windows into its district grid. 'all' does every "
+        "planet; no place means the planet the camera is on.",
+        s(place={"type": "string",
+                 "description": PLACE + " Or 'all' for every planet."}),
+        lambda a: ["arrange"] + ([a["place"]] if a.get("place") else [])),
+    "tidy": (
+        "Put the whole canvas straight in one verb: gather anything adrift, "
+        "arrange every planet, sweep the overgrown stacks to the archive.",
+        s(),
+        lambda a: ["tidy"]),
+    "gather": (
+        "Bring every window adrift in deep space to a planet — home unless "
+        "one is named. Nothing else moves.",
+        s(place={"type": "string", "description": PLACE}),
+        lambda a: ["gather"] + ([a["place"]] if a.get("place") else [])),
+    "sweep": (
+        "Drain a crowded planet's stack — the windows past the twelve the "
+        "grid holds — to the archive, or wherever `to` names. Naming `to` "
+        "requires naming `place`: the drain is positional, and a destination "
+        "without a source would silently become the default drain.",
+        s(place={"type": "string", "description": PLACE},
+          to={"type": "string", "description": PLACE + " Requires place."}),
+        sweep_args),
+    "set_mode": (
+        "Enter or leave a screen mode. focus tiles this planet's windows "
+        "over the screen; solo is one window a readable column wide; "
+        "present is one window and nothing of sol showing; off leaves "
+        "whichever is on. One key in, the same key out: every window "
+        "returns to the size and place it had.",
+        s(mode={"type": "string", "enum": ["focus", "solo", "present", "off"],
+                "required": True},
+          windows={"type": "integer",
+                   "description": "focus only: tile just the N most "
+                                  "recently used windows."}),
+        lambda a: (["mode", "off"] if a["mode"] == "off" else
+                   [a["mode"]] + ([str(a["windows"])]
+                                  if a["mode"] == "focus" and a.get("windows")
+                                  else []))),
+    "set_palette": (
+        "The sky's two palettes. night walks the light towards amber, as an "
+        "evening does; dark turns the Sun down and the system goes cold. "
+        "Value is 'on', 'off', a level 0-1, or for night 'auto' to follow "
+        "the clock. Setting one turns the other off.",
+        s(palette={"type": "string", "enum": ["night", "dark"],
+                   "required": True},
+          value={"type": "string", "required": True,
+                 "description": "'on', 'off', 'auto' (night only), or 0-1."}),
+        lambda a: [a["palette"], a["value"]]),
+    "signal": (
+        "A place calls for attention: light lands on its planet, its name "
+        "plate wears an ember, the bar marks it — and nothing covers "
+        "anyone's work. This is how an agent says 'done' or 'blocked': "
+        "signal from the district your work lives on, and whoever is "
+        "watching the sky sees which world is calling. Arrival clears it.",
+        s(message={"type": "string", "required": True,
+                   "description": "What the call says, e.g. 'review ready'."},
+          at={"type": "string",
+              "description": PLACE + " Defaults to the focused window's "
+                             "district, then the camera's."},
+          urgent={"type": "boolean",
+                  "description": "A red call: failures, blockers."}),
+        lambda a: ["signal"] + (["--at", a["at"]] if a.get("at") else [])
+                             + (["--urgent"] if a.get("urgent") else [])
+                             + [a["message"]]),
+    "answer": (
+        "Fly to the oldest district still calling, urgent ones first. "
+        "Arriving is the acknowledgement; there is no queue to manage.",
+        s(),
+        lambda a: ["answer"]),
+    "homes": (
+        "Which app is filed on which planet — the [homes] table of "
+        "sol.toml, resolved. Runs `sol homes --json`.",
+        s(),
+        lambda a: ["homes", "--json"]),
+    "doctor": (
+        "Is this machine set up right? Every check with its status, as "
+        "`sol doctor --json` — the whole bug report in one object.",
+        s(),
+        lambda a: ["doctor", "--json"]),
+}
+
+
+def run_tool(name, args):
+    """One tool call: build the argv, run sol, hand back what it said.
+
+    A non-zero exit is a tool error rather than a protocol error — the
+    distinction MCP draws on purpose, so the agent reads `sol send: no
+    focused window` as an answer it can act on rather than a transport
+    fault it can only retry.
+    """
+    _, schema, build = TOOLS[name]
+    for k in schema.get("required", []):
+        if args.get(k) in (None, ""):
+            return "%s: '%s' is required" % (name, k), True
+    try:
+        argv = ["sol"] + [str(w) for w in build(args)]
+    except (KeyError, TypeError, ValueError) as e:
+        return "%s: bad arguments (%s)" % (name, e), True
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        return "sol is not on PATH — is sol installed?", True
+    except subprocess.TimeoutExpired:
+        return "%s: `%s` did not answer within two minutes" \
+            % (name, " ".join(argv)), True
+    if r.returncode != 0:
+        out = ANSI.sub("", (r.stdout + r.stderr).strip())
+        return out or "`%s` exited %d" % (" ".join(argv), r.returncode), True
+    # Success answers with stdout alone. The JSON reads are a contract — one
+    # stray warning on stderr concatenated in would break every agent's
+    # parse at once, which is the prose-scraping this wrapper exists to end.
+    return ANSI.sub("", r.stdout.strip()) or "done", False
+
+
+def sol_version():
+    try:
+        r = subprocess.run(["sol", "--version"], capture_output=True,
+                           text=True, timeout=10)
+        return r.stdout.strip().split()[-1]
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return "unknown"
+
+
+def reply(id, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": id}
+    if error is not None:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue                     # not ours to diagnose; read on
+        method, id = msg.get("method"), msg.get("id")
+        if id is None:                   # a notification asks for no answer
+            continue
+        if method == "initialize":
+            # Echo the client's revision only if it is one this server has
+            # actually been written against; otherwise answer with the one
+            # it has. Claiming a version never heard of turns a clean
+            # handshake mismatch into inexplicable parse errors later.
+            asked = (msg.get("params") or {}).get("protocolVersion")
+            reply(id, {"protocolVersion": asked if asked in PROTOCOLS
+                       else PROTOCOLS[0],
+                       "capabilities": {"tools": {}},
+                       "serverInfo": {"name": "sol",
+                                      "version": sol_version()}})
+        elif method == "ping":
+            reply(id, {})
+        elif method == "tools/list":
+            reply(id, {"tools": [{"name": name, "description": desc,
+                                  "inputSchema": schema}
+                                 for name, (desc, schema, _)
+                                 in TOOLS.items()]})
+        elif method == "tools/call":
+            p = msg.get("params") or {}
+            name = p.get("name")
+            if name not in TOOLS:
+                reply(id, error={"code": -32602,
+                                 "message": "no tool named %r" % name})
+                continue
+            args = p.get("arguments") or {}
+            if not isinstance(args, dict):
+                reply(id, error={"code": -32602,
+                                 "message": "arguments must be an object"})
+                continue
+            # A doorway that falls over when one caller trips is no doorway:
+            # whatever a single call manages to break stays that call's
+            # error, and the session keeps answering.
+            try:
+                text, failed = run_tool(name, args)
+            except Exception as e:
+                text, failed = "%s: %s" % (name, e), True
+            reply(id, {"content": [{"type": "text", "text": text}],
+                       "isError": failed})
+        else:
+            reply(id, error={"code": -32601,
+                             "message": "method %r is not offered" % method})
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass                             # the client hung up; so do we

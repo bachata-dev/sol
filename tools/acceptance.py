@@ -196,6 +196,92 @@ def test_json_lines(mod):
     check("sol here --waybar is json", ok, r.stdout[:120])
 
 
+def test_agent_surface(mod):
+    """The machine voice: --json on the read commands, and the MCP doorway.
+
+    Both halves are the same claim — that an agent can query this desktop
+    without scraping prose — so they are proved together, against the same
+    live canvas the prose answers describe.
+    """
+    print("\n2b. the machine voice — --json, and sol-mcp")
+    r = sol("list", "--json")
+    try:
+        got = json.loads(r.stdout)
+        ok = ({p["n"] for p in got["places"]} == set(range(9))
+              and got["total"] == sum(p["count"] for p in got["places"])
+              + len(got["adrift"]))
+    except (ValueError, KeyError, TypeError) as e:
+        got, ok = e, False
+    check("sol list --json is the whole census, every place present",
+          ok, str(got)[:200])
+
+    r = sol("here", "--json")
+    try:
+        got = json.loads(r.stdout)
+        ok = all(k in got for k in ("place", "label", "windows", "camera",
+                                    "zoom", "mode", "calls"))
+    except ValueError as e:
+        got, ok = e, False
+    check("sol here --json says where, what mode, who is calling",
+          ok, str(got)[:200])
+
+    r = sol("homes", "--json")
+    try:
+        ok = isinstance(json.loads(r.stdout), dict)
+    except ValueError:
+        ok = False
+    check("sol homes --json is an object", ok, r.stdout[:120])
+
+    r = sol("doctor", "--json")
+    try:
+        got = json.loads(r.stdout)
+        ok = (isinstance(got.get("checks"), list)
+              and all(c["status"] in ("ok", "warn", "bad")
+                      for c in got["checks"])
+              and got["healthy"] == (r.returncode == 0))
+    except (ValueError, KeyError, TypeError) as e:
+        got, ok = e, False
+    check("sol doctor --json grades every check, and healthy matches "
+          "the exit code", ok, str(got)[:300])
+
+    # The doorway itself: one MCP session over stdio — initialize, list the
+    # tools, call a read — proving the framing and not merely the wrapper.
+    mcp = _which("sol-mcp")
+    lines = "\n".join(json.dumps(m) for m in (
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+         "params": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "where", "arguments": {}}})) + "\n"
+    r = subprocess.run([mcp], input=lines, capture_output=True, text=True,
+                       timeout=60)
+    replies = {}
+    for ln in r.stdout.splitlines():
+        try:
+            m = json.loads(ln)
+            replies[m.get("id")] = m
+        except ValueError:
+            pass
+    check("sol-mcp answers initialize offering tools",
+          "tools" in replies.get(1, {}).get("result", {})
+                                       .get("capabilities", {}),
+          r.stdout[:200])
+    names = {t["name"] for t in replies.get(2, {})
+             .get("result", {}).get("tools", [])}
+    check("sol-mcp offers the verbs",
+          {"where", "list_windows", "goto", "send_focused",
+           "signal", "answer"} <= names, sorted(names))
+    got = replies.get(3, {}).get("result", {})
+    try:
+        ok = (not got.get("isError")
+              and "label" in json.loads(got["content"][0]["text"]))
+    except (ValueError, KeyError, IndexError, TypeError):
+        ok = False
+    check("calling 'where' through MCP returns sol here --json",
+          ok, str(got)[:200])
+
+
 # ── 3. bad input is refused, not crashed on ───────────────────────────────
 def test_error_paths(mod):
     print("\n3. bad input is refused clearly")
@@ -1500,6 +1586,7 @@ def main():
     mod = load_sol()
     tests = [
         ("commands", test_command_surface), ("json", test_json_lines),
+        ("agents", test_agent_surface),
         ("errors", test_error_paths), ("corrupt", test_corrupt_state_files),
         ("districts", test_districts), ("arrange", test_arrange),
         ("cards", test_cards), ("flight", test_flight),
