@@ -8,7 +8,7 @@ sudo systemctl disable --now sol-spin 2>/dev/null || true
 sudo rm -f /etc/systemd/system/sol-spin.service
 sudo systemctl daemon-reload
 sudo rm -f /usr/local/bin/sol /usr/local/bin/sol-help /usr/local/bin/sol-map /usr/local/bin/sol-cmd \
-           /usr/local/bin/sol-menu /usr/local/bin/sol-session \
+           /usr/local/bin/sol-menu /usr/local/bin/sol-ripple /usr/local/bin/sol-session \
            /usr/local/bin/sol-spin /usr/local/bin/sol-planetarium \
            /usr/local/bin/driftwm-up
 # `sol` itself is a stub in front of a module — the module goes too.
