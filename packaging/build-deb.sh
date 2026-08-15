@@ -56,7 +56,7 @@ if __name__ == "__main__":
 STUB
 chmod 755 "$ROOT/usr/bin/sol"
 
-install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
+install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd bin/sol-footer \
               bin/sol-ripple bin/sol-session bin/sol-mcp \
               bin/sol-planetarium bin/sol-spin \
               bin/driftwm-up bin/driftwm-background-next "$ROOT/usr/bin/"

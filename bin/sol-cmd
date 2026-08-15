@@ -1,19 +1,10 @@
 #!/bin/bash
-# Toggle sol's command line — the footer's other half.
+# Open sol's command line — which is the footer itself now.
 #
-# The bar along the bottom is a status line until you ask it something. This
-# opens a one-line terminal directly above it, styled to match, running the
-# same CLI everything else goes through. Enter runs, esc or mod+; dismisses.
+# The strip along the bottom holds both registers: at rest it reports, and
+# addressed it listens. sol-footer owns the surface; this just knocks. The
+# name is kept because a keybinding, the bar's on-click and a README all
+# learned it — and on a machine without GTK, sol-footer's knock falls back
+# to the one-line foot terminal this script used to spawn.
 
-if pgrep -f "foot -a sol-cm[d]" > /dev/null; then
-  pkill -f "foot -a sol-cm[d]"
-  exit 0
-fi
-
-exec foot -a sol-cmd \
-  -o main.font='JetBrains Mono:size=11' \
-  -o colors.alpha=0.94 \
-  -o colors.background=16161e \
-  -o colors.foreground=c0caf5 \
-  -o main.pad=10x6 \
-  -e sol prompt
+exec sol-footer toggle

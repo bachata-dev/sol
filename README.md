@@ -418,13 +418,32 @@ a name plate work from far out, and the menu no longer has an opinion about it e
 
 ![the menu](screenshots/menu.png)
 
-**The footer** is the same bar upside down. The header says where you are; this one says what sol
-last did — `arrange 3 · just now` — and it reserves its 28 pixels at the screen edge rather than
+**The footer** is the same bar upside down, and it is one surface with two registers — the way
+vi's status line has been its command line for fifty years. At rest it reports: the header says
+where you are, this strip says what sol last did — `arrange 3 · just now` — the event a shade
+brighter than its timestamp, a signal in the colour of the district that sent it, and a clock
+that coarsens instead of ticking. It reserves its 28 pixels at the screen edge rather than
 floating over your windows.
 
-Press **`mod+;`** and it opens into a command line above itself: any `sol` command, with tab
-completion over the subcommands, the planets and the roles. A bare place name is taken as `goto`,
-because "jupiter" is what you would type if nobody had told you a verb was expected.
+Press **`mod+;`** and the same 28 pixels listen. Nothing opens and nothing arrives: the cursor
+lights after the `☉ ▸` that was always shaped like a prompt, and the echo yields its half of the
+line to a **ghost that says what `enter` will do before you press it** — type `jup` and the right
+edge reads *go to Jupiter · mod+5*, carrying the keybinding the way the menu's accelerator column
+does, at the exact moment the intent exists. The line falls through command → place → window: a
+bare place name is taken as `goto`, because "jupiter" is what you would type if nobody had told
+you a verb was expected, and a word that is neither is a window to `find` — `sla` reads *fly to
+"Slack" · Venus* before you commit. Tab completes into the same slot, up-arrow recalls across
+sessions, and a typo keeps the line and turns the ghost corrective — an error costs a glance,
+not a retype.
+
+Ask it a question and the answer lands where things persist: `here` closes the prompt and leaves
+`here → Earth · home · 10` in the echo. The one case a line cannot hold — `list`, `doctor` — grows
+the strip the rows it needs and gives them back on the next keypress, which is the minibuffer's
+move, and emacs has kept it for forty years because it is right.
+
+The strip is a layer-shell surface, the same species as the menu, so it holds the keyboard only
+while addressed — and on a machine without GTK it execs the waybar-and-foot pair it replaced, so
+the bottom edge is never simply missing.
 
 ![the footer, and its command line](screenshots/footer.png)
 
@@ -572,8 +591,9 @@ it is the difference between a keybinding that feels instant and one that nearly
 every press, every menu item and every click in the bar.
 
 **Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
-`python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu — without them right-click has
-nothing to open and everything else works; `python3-gi-cairo` as well for the signal ripples —
+`python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu and the footer's own strip —
+without them right-click has nothing to open and the footer falls back to its waybar-and-foot
+pair, and everything else works; `python3-gi-cairo` as well for the signal ripples —
 without it the embers and the bar still say everything, just without the water; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
 plus a Nerd Font for the bar glyphs.
 [Omarchy](https://omarchy.org) keybindings light up automatically if omarchy is installed, and are

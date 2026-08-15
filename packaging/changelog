@@ -1,3 +1,32 @@
+sol (1.5.0) unstable; urgency=medium
+
+  * The footer is one surface with two registers now — sol-footer, a
+    layer-shell strip the same species as the menu, replacing the
+    waybar-and-foot pair. At rest it reports, two-toned, a signal in its
+    district's colour, the clock coarsening instead of ticking; addressed
+    (mod+;) the same 28 pixels listen, with a ghost that says what enter
+    will do before it is pressed — command, then place, then window —
+    tab completing into the same slot and a typo keeping the line. One-line
+    answers land in the echo; longer ones grow the strip, minibuffer-wise,
+    and give the pixels back on the next keypress. Without GTK it execs
+    the old pair, so the bottom edge is never simply missing.
+  * The strip keeps the house rules it was born into: a knock cannot kill
+    it while it is still waking (the waybar login lesson, kept this time);
+    the machine that can host a strip is decided by one predicate, so the
+    fallback doors cannot disagree; mod+; still answers inside present
+    mode, borrowing its own hidden pixels and giving them back; a failed
+    command reports its refusal to the echo instead of closing into
+    silence; the ghost reads the same haystack `sol find` will search, so
+    it cannot promise a flight the keypress refuses; and the prompt's
+    vocabulary, phrases and keys come from sol's own tables — two prompts,
+    one voice.
+  * The cursor stops blinking after ten idle seconds and no frame is
+    committed for a prompt nobody is at; the compositor now returns shm
+    buffers the moment their texture is uploaded, which was the flat
+    per-frame tax all along — a commit costs what its damage costs.
+
+ -- sol <noreply@github.com>  Sun, 16 Aug 2026 12:00:00 +0000
+
 sol (1.4.0) unstable; urgency=medium
 
   * Drivable by agents: the read commands answer in a machine voice too.

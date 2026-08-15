@@ -41,6 +41,7 @@ def _which(name, *extra):
 SOL = _which("sol")
 HAND = _which("sol-hand", "/usr/share/sol/tools/sol-hand.py")
 MENU = _which("sol-menu")
+FOOTER = _which("sol-footer")
 GREEN, RED, YELLOW, DIM, OFF = (
     "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m")
 
@@ -1581,6 +1582,137 @@ def test_waking(mod):
         mod.waking.__defaults__[1].clear()
 
 
+# ── 23. the footer strip ──────────────────────────────────────────────────
+def test_footer(mod):
+    """One surface, two registers — and the seams are what get tested.
+
+    The logic half is driven through the installed file, the way the menu's
+    wiring test drives sol-menu: load it, skip the surface, and ask the
+    resolve chain the questions the ghost answers with. The live half is the
+    part no import can prove — that the strip is up, that a knock does not
+    kill it, and that a real keystroke typed at the addressed strip comes
+    back out as an answer in the echo's file, which is the whole promise of
+    an exclusive keyboard on a layer surface.
+    """
+    print("\n23. the footer strip holds both registers")
+    r = run("python3", "-c", "import gi; print('GI')")
+    if "GI" not in r.stdout:
+        check("python3-gi is installed (without it the strip is a waybar)",
+              False, (r.stderr or "").strip()[:200])
+        return
+
+    # a. the installed strip is wired to the installed sol, and the chain
+    # falls through the way the ghost claims: command, then place, then
+    # window. Footer.__new__ skips __init__, so no surface is created and
+    # no resident is disturbed — this is the logic, alone.
+    probe = (
+        "import importlib.machinery as m, importlib.util as u;"
+        "l = m.SourceFileLoader('probe', %r);" % FOOTER +
+        "spec = u.spec_from_loader('probe', l);"
+        "mod = u.module_from_spec(spec);"
+        "l.exec_module(mod);"
+        "f = mod.Footer.__new__(mod.Footer);"
+        "f.wins = [('slack — general slack', 'Slack — general',"
+        " mod.sol.PLANETS[1])];"
+        "print('CMD', f.resolve(['arrange'])[0]);"
+        "print('PLACE', f.resolve(['jupiter'])[0]);"
+        "print('WIN', f.resolve(['sla'])[0]);"
+        "f.buf = 'jup'; print('GHOST', f.preview());"
+        "f.buf = 'arrnge'; print('TYPO', f.preview())")
+    r = run("python3", "-c", probe, timeout=25)
+    out = r.stdout + r.stderr
+    check("sol-footer loads a sol that still has its places in it",
+          "PLACE place" in out, out.strip()[:300] or "no output")
+    check("the chain is command, then place, then window",
+          "CMD cmd" in out and "WIN window" in out, out[:300])
+    check("the ghost names the place and carries its key",
+          "Jupiter" in out and "mod+5" in out, out[:300])
+    check("a typo turns the ghost corrective",
+          "no such command" in out and "arrange" in out, out[:300])
+
+    # b. the resident, and the knock. If the session has no strip yet —
+    # a login from before this existed — one is spawned inside the session
+    # and taken down again at the end, so the machine is left as found.
+    def strip_up():
+        return run("pgrep", "-f", "sol-foote[r]").returncode == 0
+
+    was = strip_up()
+    if not was:
+        msg("action", "spawn", FOOTER)
+        for _ in range(12):                     # up in a few hundred ms;
+            time.sleep(0.25)                    # the cap is for cold GTK
+            if strip_up():
+                break
+        time.sleep(0.6)                         # and let its handlers land
+    if not check("the strip is up", strip_up(), "sol-footer did not start"):
+        return
+    run(FOOTER, "toggle")                       # address it
+    time.sleep(1.0)
+    check("a knock does not kill it", strip_up(),
+          "the resident died of being toggled")
+
+    # c. the whole promise, with a real keyboard. sol-hand's key table is
+    # j/k/n/p/q and the specials, so the line is typed the way completion
+    # is meant to carry it: `j`, tab — which the ghost completes to
+    # `jupiter` — then enter, which falls through to goto. The proof is the
+    # echo's file saying `goto jupiter`, written by the flight the strip
+    # started. Submitting is also what closes the prompt, so the keyboard
+    # only needs letting go by hand when the submit never happened.
+    submitted = False
+    if os.path.exists(HAND):
+        # The prompt closes on focus-out by design, and a full-suite run has
+        # windows still settling from earlier groups — a birth can steal the
+        # keyboard between the knock above and the typing below. So: let the
+        # canvas go quiet, take a clean slate, and address-and-type in one
+        # breath, the way a hand actually does it.
+        quiet()
+        run("sudo", HAND, "key", "escape")
+        time.sleep(0.3)
+        run(FOOTER, "toggle")
+        time.sleep(0.6)
+        mod.footer("footer acceptance sentinel")
+        run("sudo", HAND, "key", "j", "tab", "enter")
+        # Either voice of the same flight: an empty Jupiter notes the plain
+        # command, a populated one frames the district and teaches the
+        # second press — "goto 5 · mod+5 again drops in". Both start with
+        # goto and name Jupiter one way or the other; both mean it flew.
+        def flew(text):
+            return text.startswith("goto jupiter") or text.startswith("goto 5")
+        got = ""
+        for _ in range(20):
+            time.sleep(0.3)
+            try:
+                with open(mod.LOG) as f:
+                    got = f.read()
+            except OSError:
+                got = ""
+            if flew(got):
+                break
+        submitted = flew(got)
+        check("typed j·tab·enter at the strip, and it flew — the echo says so",
+              submitted, "sol-last reads %r" % got[:120])
+    else:
+        check("sol-hand is installed", False, "no %s" % HAND)
+
+    # The keyboard is let go with Escape rather than a conditional toggle:
+    # Escape closes an open prompt and means nothing to a closed one, so a
+    # raced sentinel read cannot trick the cleanup into RE-opening the
+    # prompt and walking away with the session's keyboard in its teeth.
+    if os.path.exists(HAND):
+        run("sudo", HAND, "key", "escape")
+        time.sleep(0.4)
+    elif not submitted:
+        run(FOOTER, "toggle")                   # blind, but all there is
+        time.sleep(0.5)
+    if not was:
+        pids = run("pgrep", "-f", "sol-foote[r]").stdout.split()
+        for pid in pids:
+            try:
+                os.kill(int(pid), 15)
+            except (OSError, ValueError):
+                pass
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -1596,7 +1728,7 @@ def main():
         ("focus", test_focus_live), ("follows", test_mode_follows),
         ("exclusive", test_mode_exclusive), ("settling", test_settling),
         ("typing", test_typing), ("signals", test_signals),
-        ("waking", test_waking),
+        ("waking", test_waking), ("footer", test_footer),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))
