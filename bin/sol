@@ -32,6 +32,8 @@ ease-in-out curve — so the view always travels, and never jumps.
   sol send <name|number>       send the focused window to a planet
   sol back                     the camera to where it was before the last flight
   sol find [word]              fly to a window by name, wherever it is
+  sol signal [--urgent] [--at place] <text|-- cmd>   this place calls for you
+  sol answer                   fly to the oldest call; arriving clears it
   sol tidy                     gather, arrange every planet, sweep the overgrown
   sol gather [place]           bring every adrift window in (default: home)
   sol sweep [from] [to]        drain a planet's stack to the archive
@@ -94,7 +96,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -2290,8 +2292,12 @@ def cmd_goto(args):
                 d.focus(w["id"])
                 spotlight(d, st, w["id"])
                 fly(d, *land_on(st, w))
+                signals_seen(p)      # dropping in is arriving too
                 return
     fly(d, fx, fy, fz)
+    # Arrival is the acknowledgement, and this is an arrival by name — it
+    # must clear the calls even where no watcher runs to notice the landing.
+    signals_seen(p)
     if fz < WORK_ZOOM and p is not SUN:
         # Framed rather than landed: the second press is the half of the
         # habit nobody guesses, so this is the moment to say it.
@@ -3197,6 +3203,12 @@ def shrug(doing, why):
     sys.stderr.flush()
 
 
+# The district the camera stood on at the last refresh beat — "?" until the
+# first beat of this process says otherwise. What lets refresh() tell an
+# arrival (clear the calls) from a residence (leave them alone).
+_STOOD = ["?"]
+
+
 def refresh(d, st=None):
     """Bring the bar and the plates up to date, and wake whoever shows them.
 
@@ -3214,7 +3226,19 @@ def refresh(d, st=None):
     cam = tuple(out.get("camera") or (0.0, 0.0))
     z = out.get("zoom") or 1.0
     place, on_it, n = whereabouts(st, cam, z)
-    if write_plates(st):
+    # Arriving answers; being parked does not. The watcher is the one caller
+    # that can tell those apart, because it is the one that saw the last
+    # beat: a call is cleared when the camera *crosses onto* the district,
+    # not merely for being found there — a camera left on Mars overnight
+    # must not eat the calls Mars makes while you are asleep. "?" is the
+    # fresh-process state, in which nothing is known and nothing is cleared.
+    standing = place.n if (place and on_it and place is not SUN) else None
+    if standing is not None and _STOOD[0] not in ("?", standing):
+        signals_seen(place)
+    _STOOD[0] = standing
+    calls = read_signals()          # once; the plates and the bar share it
+    ringing = calls_by_planet(calls)
+    if write_plates(st, ringing):
         wake("plates", signal.SIGUSR1)
 
     # Which half moved decides who is woken. Reading the bar back before
@@ -3225,7 +3249,7 @@ def refresh(d, st=None):
             before = f.read().split("\n")
     except OSError:
         before = []
-    text, changed = write_bar(st, place, on_it, n, z)
+    text, changed = write_bar(st, place, on_it, n, z, ringing)
     if changed:
         after = text.split("\n")
         clock = BAR_PARTS.index("last")
@@ -3657,6 +3681,187 @@ def place_under(st, at, zoom):
     return (p, counts.get(p.n, 0)) if dist <= reach else (None, sum(counts.values()))
 
 
+# ── Signals: attention as light from a place ──────────────────────────────
+# A notification is a message about a thing, delivered on top of whatever you
+# were doing. A signal is light from a place. When something on a planet
+# wants you — an agent finished, a build went red, a long job ended — the
+# place itself calls: an ember on its name plate, a mark on its chip in the
+# bar, one line in the footer. Nothing moves, nothing covers your work, and
+# the camera stays exactly where you put it. Signals may call; they never
+# drag.
+#
+# Attention pays the debt. Standing on a district answers its calls — the
+# camera only ever moves because you moved it, so the camera arriving IS the
+# acknowledgement — and `sol answer` (mod+s) flies you to the oldest one.
+# There are no dismiss buttons and no unread management: a dark sky means
+# nothing waits.
+SIGNALS = runtime("sol-signals.json")
+SIGNAL_KEEP = 48       # calls kept; beyond this the oldest quietly age out
+
+
+def read_signals():
+    """[{n, text, urgent, t}, ...] — every place still calling, oldest first.
+
+    Tolerant entry by entry: one malformed call — a hand-edit, a half-written
+    field — must not blank the queue, because the queue is the only home the
+    messages have. Each surviving entry comes back with `n` already an int,
+    so no consumer casts it again.
+    """
+    try:
+        with open(SIGNALS) as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        return []
+    calls = []
+    for s in got if isinstance(got, list) else ():
+        try:
+            n = int(s.get("n", 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if 1 <= n <= 8:
+            calls.append(dict(s, n=n))
+    return calls
+
+
+def write_signals(calls):
+    """Atomically: written beside and renamed over, because a reader that
+    catches a truncating write sees an empty queue, and the next writer
+    would then persist that emptiness over everybody's calls."""
+    try:
+        tmp = SIGNALS + ".new"
+        with open(tmp, "w") as f:
+            json.dump(calls[-SIGNAL_KEEP:], f)
+        os.replace(tmp, SIGNALS)
+    except OSError:
+        pass                    # a call that cannot be written is not a crash
+
+
+def change_signals(fn):
+    """Read, let `fn` rewrite, write — under a lock.
+
+    The queue is the first runtime file with more than one writer: an
+    agent's hook, the watcher's beat and mod+s can all land in the same
+    instant, and an unlocked read-modify-write lets one of them resurrect
+    what another just answered, or clobber what another just called.
+    `fn` returns the new list, or None to leave the file alone.
+    """
+    import fcntl
+    try:
+        lf = open(SIGNALS + ".lock", "w")
+    except OSError:
+        out = fn(read_signals())      # no lockfile: alone is still correct
+        if out is not None:
+            write_signals(out)
+        return out
+    with lf:
+        try:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        out = fn(read_signals())
+        if out is not None:
+            write_signals(out)
+    return out
+
+
+def calls_by_planet(calls=None):
+    """{planet number: [calls]} — for the surfaces that draw embers."""
+    out = {}
+    for s in read_signals() if calls is None else calls:
+        out.setdefault(s["n"], []).append(s)
+    return out
+
+
+def signals_seen(place, on_it=True):
+    """Arriving at a district answers it: clear its calls, say whether any.
+
+    This is the whole acknowledgement model, so it is one rule in one place —
+    and the rule is *arrival*, not residence. The paths that report here are
+    the ones that know the camera just landed: `sol answer`, a goto, and the
+    watcher noticing the camera cross onto a district it was not on. A camera
+    parked on Mars since before the call is not attention — it is furniture —
+    and the sharpest version of that mistake was `sol signal` clearing its
+    own fresh call because the caller happened to be standing at home.
+    """
+    if not place or not on_it or place is SUN:
+        return False
+
+    def clear(calls):
+        kept = [s for s in calls if s["n"] != place.n]
+        return kept if len(kept) != len(calls) else None
+
+    return change_signals(clear) is not None
+
+
+def transmit(n, urgent):
+    """The transmission: an expanding ring from the calling planet, drawn by
+    sol-ripple on a click-through layer surface, at one fixed speed in canvas
+    units — so a call from next door arrives at once and one from Neptune
+    takes visibly longer, which is the same sentence the whole layout speaks.
+
+    Garnish, not the meal: the queue, the ember and the star have already
+    said everything, so every way this can fail — no ripple installed, no
+    display to draw on, no GTK — is a silent pass. A call announced over ssh
+    still transmits, because the person it is calling is at the screen: the
+    display is found from the runtime directory when the caller has none.
+    """
+    import subprocess
+    env = dict(os.environ)
+    if not env.get("WAYLAND_DISPLAY"):
+        # The display is derived exactly the way Drift derives its socket —
+        # DRIFTWM_SOCKET first, then driftwm's own ipc-<display>.sock — not
+        # by taking the first wayland-* socket in the runtime dir, which on
+        # a machine with a second compositor is precisely the other session
+        # (the mistake Drift's own comment warns about).
+        path = env.get("DRIFTWM_SOCKET")
+        if not path:
+            try:
+                path = next(iter(sockets()), None)
+            except OSError:
+                path = None
+        if not path:
+            return
+        base = os.path.basename(path)          # ipc-<display>.sock
+        if not (base.startswith("ipc-") and base.endswith(".sock")):
+            return
+        env["WAYLAND_DISPLAY"] = base[4:-5]
+        env.setdefault("XDG_RUNTIME_DIR",
+                       os.path.dirname(os.path.dirname(path)))
+    try:
+        subprocess.Popen(["sol-ripple", str(n), "1" if urgent else "0"],
+                         env=env, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def signal_here():
+    """The district a bare `sol signal` speaks from.
+
+    The focused window's district first — the terminal you typed it in — and
+    the camera's district when focus answers nothing. Asked at the moment of
+    the call, which is the honest moment only for an interactive one: a
+    deferred caller (`make && sol signal done`) fires after you have flown
+    away, so deferred work should be wrapped instead — `sol signal -- make`
+    captures the place when the work *starts*.
+    """
+    try:
+        d = Drift()
+        st = d.state()
+    except (SystemExit, OSError):
+        return None
+    w = next((w for w in real_windows(st) if w.get("is_focused")), None)
+    if w:
+        p = belongs_to(w, read_claims())
+        if p is not None and p is not SUN:
+            return p
+    out = active_output(st)
+    cam = tuple(out.get("camera") or (0.0, 0.0))
+    z = out.get("zoom") or 1.0
+    place, on_it, _ = whereabouts(st, cam, z)
+    return place if (on_it and place is not None and place is not SUN) else None
+
+
 def windows_word(n):
     return "%d window%s" % (n, "" if n == 1 else "s")
 
@@ -3685,20 +3890,29 @@ def held(n):
 PLATE_COLS = 40
 
 
-def plate_line(p, n):
+def plate_line(p, n, calls=()):
     """The line a planet's name plate shows: "3  E A R T H  home · 10 + 7",
-    centred in the plate, because the plate is centred on the planet."""
+    centred in the plate, because the plate is centred on the planet.
+
+    A district with unanswered calls wears an ember — "✳  4  M A R S …" —
+    in the plate's own colour, because the plate is the one thing readable
+    from every altitude: it is exactly the surface a signal should light."""
     tail = "%s · %s" % (p.role, held(n)) if n else p.role
     name = " ".join(p.name.upper())
-    wide = len("%d   %s   %s" % (p.n, name, tail))       # the escapes do not print
+    star = ("✳%s  " % (len(calls) if len(calls) > 1 else "")) if calls else ""
+    lit = ("\033[1m%s\033[0m" % star
+           if any(s.get("urgent") for s in calls) else star)
+    wide = len("%s%d   %s   %s" % (star, p.n, name, tail))   # escapes do not print
     pad = " " * max(0, (PLATE_COLS - wide) // 2)
-    return "%s%d   %s   \033[2m%s\033[0m" % (pad, p.n, name, tail)
+    return "%s%s%d   %s   \033[2m%s\033[0m" % (pad, lit, p.n, name, tail)
 
 
-def write_plates(st):
+def write_plates(st, ringing=None):
     """Refresh the name plates, and say whether they actually moved."""
     counts = census(st)
-    text = "".join(plate_line(p, counts.get(p.n, 0)) + "\n" for p in PLANETS)
+    ringing = calls_by_planet() if ringing is None else ringing
+    text = "".join(plate_line(p, counts.get(p.n, 0), ringing.get(p.n, ())) + "\n"
+                   for p in PLANETS)
     return write_if_changed(PLATES, text)
 
 
@@ -3707,7 +3921,8 @@ def cmd_plate(args):
     p = find_place(args[0]) if args else None
     if not p:
         sys.exit("sol plate: name a planet")
-    print(plate_line(p, census(Drift().state()).get(p.n, 0)))
+    print(plate_line(p, census(Drift().state()).get(p.n, 0),
+                     calls_by_planet().get(p.n, ())))
 
 
 # ── The bar ───────────────────────────────────────────────────────────────
@@ -3759,6 +3974,20 @@ READERS = {
 }
 
 
+def cmdline(pid):
+    """How a process was invoked, NUL-separated, or nothing if it has gone.
+
+    Two waybars run here and they differ only in the config named on the
+    command line, so this is the only thing that tells the header from the
+    footer.
+    """
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
 def waking(who, ttl=15.0, _seen={}):
     """The processes to wake for `who`, looked up rarely.
 
@@ -3780,8 +4009,21 @@ def waking(who, ttl=15.0, _seen={}):
             continue
         try:
             with open("/proc/%s/cmdline" % entry, "rb") as f:
-                if want not in f.read():
-                    continue
+                argv = f.read().split(b"\0")
+            if want not in b" ".join(argv):
+                continue
+            # The marker names a file, and a file can be named twice: the
+            # plate is `sh …/label.sh 3 EARTH home`, spawned by a
+            # `sh -c "foot … -e sh …/label.sh 3 EARTH home"` wrapper whose
+            # command line carries the same marker and whose comm is the
+            # same shell. The reader is the one *executing* the script —
+            # the marker as its argv[1] — never the one quoting it inside a
+            # -c string: a wrapper installs no handler and never will, and
+            # signalling it was a silent kill this filter now refuses
+            # rather than warns about.
+            if who == "plates" and not (len(argv) > 1
+                                        and argv[1].endswith(want)):
+                continue
             with open("/proc/%s/comm" % entry) as f:
                 if f.read().strip() in comms:
                     pids.append(int(entry))
@@ -3791,13 +4033,121 @@ def waking(who, ttl=15.0, _seen={}):
     return pids
 
 
+def alive_since(pid):
+    """When this pid started, from /proc — the thing that makes a pid an
+    identity. A bare pid is a name the kernel reuses; (pid, starttime) is a
+    process."""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            return f.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def listening(pid, sig, _yes={}):
+    """Whether this process has installed a handler for `sig` yet.
+
+    /proc/<pid>/status carries SigCgt: the mask of signals the process has
+    a handler for, bit sig-1. A handler is installed once and never given
+    back, so a reader only has to be read until the first time it says yes
+    — after that the answer keeps for as long as the process does. "The
+    process", not "the pid": the cache is keyed by (pid, starttime), or a
+    bar restarted into a recycled pid would inherit the old bar's yes and
+    be shot mid-startup — the exact kill this guard exists to prevent.
+    """
+    start = alive_since(pid)
+    if start is None:
+        return False                    # gone already
+    key = (pid, start)
+    got = _yes.get(key)
+    if got and sig in got:
+        return True
+    # Readers are started once at login and outlive everything, so this
+    # holds ten entries and not ten thousand. The sweep runs on any lookup
+    # once the dict is oversized — not only on the lucky path that caches a
+    # new yes — so the bound actually binds.
+    if len(_yes) > 64:
+        for dead in [k for k in list(_yes) if alive_since(k[0]) != k[1]]:
+            del _yes[dead]
+    try:
+        with open("/proc/%d/status" % pid) as f:
+            for line in f:
+                if not line.startswith("SigCgt:"):
+                    continue
+                if not (int(line.split()[1], 16) >> (sig - 1)) & 1:
+                    return False
+                _yes.setdefault(key, set()).add(sig)
+                return True
+    except (OSError, ValueError, IndexError):
+        pass                            # gone, or a kernel that does not say
+    return False
+
+
+# Every signal sol sends a reader is one whose default action is to terminate
+# the process — SIGUSR1 for the plates, the real-time pair for the bar. That
+# default is what a process gets until it installs a handler, so a signal sent
+# to a reader that is still starting up does not refresh it. It kills it.
+#
+# Which is not hypothetical, and on a slow machine it is not even close. On
+# the 4K iMac driftwm's autostart starts waybar twenty milliseconds before
+# `sol watch`, whose first refresh lands a tenth of a second after that — and
+# waybar, cold, takes four and three quarter seconds to get from exec to its
+# first drawn surface. It was being shot forty times over. The header and the
+# footer died at every single login there and came up fine on the laptop: one
+# race, decided by how long GTK takes to start.
+#
+# Nothing said so, either. The whole record of a lost login was the shell's
+# own `Real-time signal 8` in driftwm's log — no date, no sol, no waybar.
+# READERS below has the sibling of this bug, the right signal sent to the
+# wrong process; this is the right signal sent to the right process at the
+# wrong moment, and `sol doctor` now answers both by asking whether the two
+# bars are actually up rather than merely installed.
+#
+# So ask before tapping. A reader that is not listening yet is skipped rather
+# than killed, and it misses nothing by being skipped: waybar runs every
+# module once when it finishes starting, and the plates read the file at the
+# top of their loop, so both come up already current from the files that are
+# on disk before either of them is signalled.
 def wake(who, sig):
-    """Tell whoever is showing this that it has changed."""
+    """Tell whoever is showing this that it has changed — if it can hear."""
     for pid in waking(who):
+        if not listening(pid, sig):
+            deaf(who, pid, sig)
+            continue
         try:
             os.kill(pid, sig)
         except OSError:
             pass                        # gone since we looked; the next scan refinds it
+
+
+def deaf(who, pid, sig, _said=set()):
+    """Say, once, that a reader was skipped for not listening yet.
+
+    The race this guards against left no trace anybody could act on: the
+    only record of a login that lost it was the shell's own `Real-time
+    signal 8` in driftwm's log, which names neither sol nor waybar and
+    reads like a line of noise. Once per pid, so a bar that takes a moment
+    to start is a sentence and not a stream.
+    """
+    if (pid, sig) in _said:
+        return
+    _said.add((pid, sig))
+    sys.stderr.write("sol: %s [%d] has no handler for %s yet — not signalling "
+                     "it (an unhandled signal would kill it); it will come up "
+                     "current on its own\n"
+                     % (who, pid, signame(sig)))
+    sys.stderr.flush()
+
+
+def signame(sig):
+    """SIGRTMIN+8 rather than 42, which is the number nothing documents."""
+    lo = getattr(signal, "SIGRTMIN", None)
+    if lo is not None and lo <= sig <= signal.SIGRTMAX:
+        return "SIGRTMIN+%d" % (sig - lo)
+    try:
+        return signal.Signals(sig).name
+    except ValueError:
+        return "signal %d" % sig
 
 
 # where/holding/strip/last first, then one line per planet — the bar's strip
@@ -3819,7 +4169,10 @@ LOG = runtime("sol-last")
 # so the fresh-install hint below survives the arrival, the second because
 # its whole narration runs through the footer.
 QUIET = {"here", "bar", "plate", "list", "watch", "map", "help", "menu",
-         "prompt", "first-light", "tour", "doctor", "homes"}
+         "prompt", "first-light", "tour", "doctor", "homes",
+         # signal and answer speak through the footer themselves — the call
+         # is the news, not the command that carried it.
+         "signal", "answer"}
 
 # What survives reboots: ~/.local/state/sol. The runtime files above are
 # per-boot on purpose; these two facts are not. `first-light` is whether the
@@ -3851,7 +4204,8 @@ def key_of(argv):
         return "mod+shift+←" if a.startswith("b") else "mod+shift+→"
     return {"system": "mod+u", "arrange": "mod+a", "next": "mod+n",
             "prev": "mod+p", "dive": "pinch out", "back": "mod+-",
-            "find": "mod+shift+f", "tidy": "mod+shift+a"}.get(cmd, "")
+            "find": "mod+shift+f", "tidy": "mod+shift+a",
+            "answer": "mod+s"}.get(cmd, "")
 
 
 _SAY = []
@@ -3879,8 +4233,24 @@ def footer(text):
         pass
 
 
+def spoke():
+    """sol has run a real command for this user; the footer stops teaching."""
+    if not os.path.exists(SPOKEN):
+        try:
+            os.makedirs(STATE, exist_ok=True)
+            with open(SPOKEN, "w") as f:
+                f.write("sol has spoken; the footer reports instead of teaching\n")
+        except OSError:
+            pass
+
+
 def note(argv):
     if not argv or argv[0] in QUIET:
+        # signal and answer narrate through the footer themselves, but they
+        # are still sol speaking: a session driven entirely by agents' calls
+        # must not keep reverting to the beginner hint between them.
+        if argv and argv[0] in ("signal", "answer"):
+            spoke()
         return
     if _SAY:
         text = _SAY[0]
@@ -3890,13 +4260,7 @@ def note(argv):
         if key:
             text += " · " + key
     footer(text)
-    if not os.path.exists(SPOKEN):
-        try:
-            os.makedirs(STATE, exist_ok=True)
-            with open(SPOKEN, "w") as f:
-                f.write("sol has spoken; the footer reports instead of teaching\n")
-        except OSError:
-            pass
+    spoke()
 
 
 def note_failure(action, why):
@@ -3925,6 +4289,18 @@ def first_words():
     return "mod+/ the keys · mod+e the map · right-click the sky"
 
 
+def plain(text):
+    """Text bound for a surface waybar parses as Pango markup.
+
+    The footer and the tooltips carry words sol did not write — a signal's
+    message, an app id — and one bare `&` or `<` in them fails the whole
+    parse: the module renders empty, and stays empty for as long as the
+    text is served. Escaped at the door, so the words stay words.
+    """
+    return (str(text).replace("&", "&amp;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def last_run():
     try:
         with open(LOG) as f:
@@ -3936,7 +4312,7 @@ def last_run():
         return first_words()
     when = ("just now" if age < 5 else "%ds ago" % int(age) if age < 90
             else "%dm ago" % int(age / 60))
-    return "%s · %s" % (said, when)
+    return "%s · %s" % (plain(said), when)
 
 
 RING = "①②③④⑤⑥⑦⑧"          # a planet, as the key that flies you to it
@@ -3944,16 +4320,24 @@ SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"          # its tally, small enough to read a
 DIMC = "#3b4261"            # an empty planet: present, but not asking for you
 
 
-def chip(p, n, here):
-    """One planet, as a bar segment: its ring, its tally, its colour."""
+def chip(p, n, here, calls=()):
+    """One planet, as a bar segment: its ring, its tally, its colour.
+
+    A calling planet keeps its colour even when empty and wears a small star
+    — amber for a routine call, red for an urgent one — so the strip answers
+    "who wants me" at a glance, from anywhere."""
     badge = "".join(SUP[int(c)] for c in str(n)) if n else ""
-    colour = p.colour if (n or p is here) else DIMC
+    colour = p.colour if (n or p is here or calls) else DIMC
     mark = ' underline="single" underline_color="%s"' % p.colour if p is here else ""
-    return '<span foreground="%s"%s>%s%s</span>' % (colour, mark,
-                                                    RING[p.n - 1], badge)
+    star = ""
+    if calls:
+        star = '<span foreground="%s">✶</span>' % (
+            "#f7768e" if any(s.get("urgent") for s in calls) else "#e0af68")
+    return '<span foreground="%s"%s>%s%s</span>%s' % (colour, mark,
+                                                      RING[p.n - 1], badge, star)
 
 
-def strip_markup(counts, here):
+def strip_markup(counts, here, ringing=None):
     """The eight planets as one line: where you are, and who is holding what.
 
     Ordinal rather than spatial, because that is how the system is actually
@@ -3962,16 +4346,18 @@ def strip_markup(counts, here):
     underlined, the way a Mac marks the selected segment of anything. The
     belt keeps its place in the middle, as the divide it is.
     """
+    ringing = ringing or {}
     out = []
     for p in PLANETS:
-        out.append(chip(p, counts.get(p.n, 0), here))
+        out.append(chip(p, counts.get(p.n, 0), here, ringing.get(p.n, ())))
         if p.n == 4:
             out.append('<span foreground="#2a2f45">┊</span>')
     return "  ".join(out)
 
 
-def write_bar(st, place, on_it, n, z):
+def write_bar(st, place, on_it, n, z, ringing=None):
     counts = census(st)
+    ringing = calls_by_planet() if ringing is None else ringing
     here = place if (place and on_it and place is not SUN) else None
     if place is None:
         name, cls, role = "the system", "system", "all eight planets"
@@ -3990,6 +4376,13 @@ def write_bar(st, place, on_it, n, z):
     lost = len(adrift(st))
     if lost:
         holding += '  ·  <span foreground="#e0af68">%d adrift</span>' % lost
+    # ... and unanswered calls are the other thing that must not go quiet:
+    # said in the same breath, in the colour of the loudest one.
+    calling = sum(len(v) for v in ringing.values())
+    if calling:
+        loud = any(s.get("urgent") for v in ringing.values() for s in v)
+        holding += '  ·  <span foreground="%s">✶ %d calling</span>' % (
+            "#f7768e" if loud else "#e0af68", calling)
     tally = "  ".join("%d %s · %s" % (p.n, p.name, held(counts[p.n]))
                       for p in PLANETS if counts.get(p.n)) or "nothing on the canvas"
     hold_tip = windows_word(n) + " · mod+a tidies" if n else role
@@ -4009,15 +4402,22 @@ def write_bar(st, place, on_it, n, z):
     lines = [
         {"text": name + tag, "class": cls, "tooltip": tip},
         {"text": holding, "class": cls, "tooltip": hold_tip},
-        {"text": strip_markup(counts, here), "class": "strip", "tooltip": tally},
+        {"text": strip_markup(counts, here, ringing), "class": "strip",
+         "tooltip": tally},
         {"text": last_run(), "class": "last", "tooltip": "what sol last did"},
     ]
     for p in PLANETS:
         c = counts.get(p.n, 0)
-        lines.append({"text": chip(p, c, here), "class": "chip",
-                      "tooltip": "%d %s — %s%s · mod+%d" % (p.n, p.name, p.role,
-                                                            " · %d" % c if c else "",
-                                                            p.n)})
+        calls = ringing.get(p.n, ())
+        tip = "%d %s — %s%s · mod+%d" % (p.n, p.name, p.role,
+                                         " · %d" % c if c else "", p.n)
+        if calls:
+            tip += "\n✶ " + plain(calls[-1].get("text", ""))
+            if len(calls) > 1:
+                tip += " · +%d more" % (len(calls) - 1)
+            tip += " · mod+s answers"
+        lines.append({"text": chip(p, c, here, calls), "class": "chip",
+                      "tooltip": tip})
     text = "\n".join(json.dumps(o) for o in lines) + "\n"
     return text, write_if_changed(BAR, text)
 
@@ -4039,8 +4439,12 @@ def cmd_here(args):
     st = d.state()
     z = d.zoom()
     place, on_it, n = whereabouts(st, d.camera(), z)
-    write_plates(st)          # the heartbeat that keeps the name plates current
-    bar, _ = write_bar(st, place, on_it, n, z)
+    # No acknowledgement here: a one-shot process cannot tell an arrival
+    # from a residence, and the heartbeat is exactly the caller that would
+    # eat a call for the crime of the camera being parked near it.
+    ringing = calls_by_planet()
+    write_plates(st, ringing)  # the heartbeat that keeps the name plates current
+    bar, _ = write_bar(st, place, on_it, n, z, ringing)
 
     if place is None:
         role, label = "all eight planets", "the system"
@@ -4054,6 +4458,146 @@ def cmd_here(args):
         print(bar.split("\n")[0])
     else:
         print("%s  (%s)%s" % (label, role, "  ·  " + windows_word(n) if n else ""))
+
+
+def cmd_signal(args):
+    """A place calls for you. The announce half of attention routing.
+
+        sol signal <text>                 this district calls, with a message
+        sol signal --at mars <text>       that district calls
+        sol signal --urgent <text>        a red call: failures, blockers
+        sol signal [label] -- <cmd...>    run cmd, then call by its exit code
+        sol signal                        what is still calling, oldest first
+
+    Who is calling is decided in this order: `--at`, the SOL_AT environment
+    variable (export it in an agent's shell and every call from that shell
+    is attributed), the focused window's district, the camera's. A bare
+    deferred call — `make && sol signal done` — asks *after* you have flown
+    away and lands on the wrong answer, which is what the `--` form is for:
+    it reads the place when the work starts, runs the work, and colours the
+    call by the exit code, exiting with that same code so pipelines cannot
+    tell it was there.
+    """
+    argv, urgent, at, words, job = list(args), False, None, [], None
+    while argv:
+        a = argv.pop(0)
+        if a in ("--urgent", "-u"):
+            urgent = True
+        elif a == "--at":
+            if not argv:
+                sys.exit("sol signal: --at needs a place")
+            at = argv.pop(0)
+        elif a == "--":
+            job = argv
+            break
+        else:
+            words.append(a)
+    if job is not None and not job:
+        sys.exit("sol signal: nothing to run after --")
+
+    if not words and job is None:
+        # Flags without a message are a mistake, not a query: an agent hook
+        # whose $MESSAGE expanded empty must hear about it, not be shown
+        # somebody else's queue and told everything went fine.
+        if urgent or at:
+            sys.exit("sol signal: signal what? give a message, "
+                     "or `--` a command")
+        calls = read_signals()
+        if not calls:
+            print("nothing is calling")
+            return
+        now = time.time()
+        for s in calls:
+            p = PLANETS[int(s["n"]) - 1]
+            age = now - s.get("t", now)
+            when = ("just now" if age < 5 else "%dm" % (age / 60)
+                    if age >= 60 else "%ds" % age)
+            print("  %s %d %-8s %-40s %s" % ("✳" if s.get("urgent") else " ",
+                                             p.n, p.name, s.get("text", ""),
+                                             when))
+        print("\n  `sol answer` (mod+s) flies to the oldest; arriving clears it.")
+        return
+
+    # The place is read before any work runs — for the wrapped form that is
+    # the entire point, and for the plain form it is simply now.
+    place = None
+    if at:
+        place = find_place(at)
+        if not place:
+            sys.exit("sol signal: no place called %r" % at)
+    if place is None and os.environ.get("SOL_AT"):
+        place = find_place(os.environ["SOL_AT"])
+    if place is None:
+        place = signal_here()
+    if place is None or place is SUN:
+        sys.exit("sol signal: could not tell where this call is from — "
+                 "say `--at <planet>` (or export SOL_AT in this shell)")
+
+    code = 0
+    if job is not None:
+        import subprocess
+        try:
+            code = subprocess.call(job)
+        except OSError as e:
+            print("sol signal: %s: %s" % (job[0], e.strerror or e), file=sys.stderr)
+            code = 127
+        label = " ".join(words) or os.path.basename(job[0])
+        # A negative return is a death by signal, and the shell convention
+        # for saying so is 128+N — "exit -9" is a number no shell prints.
+        outcome = ("done" if code == 0 else
+                   "signal %d" % -code if code < 0 else "exit %d" % code)
+        text = "%s · %s" % (label, outcome)
+        urgent = urgent or code != 0
+
+    else:
+        text = " ".join(words)
+
+    call = {"n": place.n, "text": text[:120], "urgent": bool(urgent),
+            "t": time.time()}
+    change_signals(lambda calls: calls + [call])
+    footer("✳ %s · %s" % (place.name, text))
+    wake("waybar", signal.SIGRTMIN + LAST_SIGNAL)
+    transmit(place.n, urgent)
+    # The embers light on the watcher's next beat anyway; this only makes
+    # "at once" true when the compositor is there to ask.
+    try:
+        refresh(Drift())
+    except (SystemExit, OSError):
+        pass
+    if code:
+        sys.exit(128 - code if code < 0 else code)
+
+
+def cmd_answer(args):
+    """Fly to the oldest place still calling. Arriving answers it.
+
+    Urgent calls first, then age — and no queue to manage afterwards,
+    because standing on the district is the acknowledgement. Press mod+s
+    again and the next-oldest call takes its turn.
+    """
+    calls = read_signals()
+    if not calls:
+        footer("nothing is calling")
+        wake("waybar", signal.SIGRTMIN + LAST_SIGNAL)
+        print("nothing is calling")
+        return
+    calls.sort(key=lambda s: (not s.get("urgent"), s.get("t", 0)))
+    first = calls[0]
+    p = PLANETS[int(first["n"]) - 1]
+    mine = [s for s in calls if int(s["n"]) == p.n]
+    cmd_goto([str(p.n)])
+    signals_seen(p)
+    line = "✳ %s · %s" % (p.name, first.get("text", ""))
+    if len(mine) > 1:
+        line += " · +%d more here" % (len(mine) - 1)
+    if len(calls) > len(mine):
+        line += " · %d elsewhere" % (len(calls) - len(mine))
+    footer(line)
+    wake("waybar", signal.SIGRTMIN + LAST_SIGNAL)
+    try:
+        refresh(Drift())
+    except (SystemExit, OSError):
+        pass
 
 
 def cmd_list(args):
@@ -4825,6 +5369,29 @@ def cmd_doctor(args):
                         "bar" if unit.startswith("waybar")
                         else "notification daemon", unit))
 
+    # Whether the two bars are actually up, which is not the same question as
+    # whether waybar is installed — and until a login on the iMac spent every
+    # session with no header and no footer, it was the only one being asked.
+    # A bar that died at startup leaves nothing behind but its absence, so the
+    # absence is what has to be checked for.
+    if d:
+        if not shutil.which("waybar"):
+            # Recommends, not Depends: a bar-less install is a choice, and a
+            # diagnostic that calls a choice a crash is the one lying.
+            row(WARN, "waybar is not installed — no header, no footer "
+                      "(it is a Recommends; sol works without it)")
+        else:
+            for conf, what in (("waybar.jsonc", "header"),
+                               ("waybar-footer.jsonc", "footer")):
+                if any(conf.encode() in cmdline(pid)
+                       for pid in waking("waybar")):
+                    row(OK, "the %s is running" % what)
+                else:
+                    row(BAD, "the %s is not running — driftwm's autostart "
+                             "starts it, so it started and died. driftwm's "
+                             "log has the reason: %s"
+                             % (what, runtime("sol-session.log")))
+
     cfg = os.path.expanduser("~/.config/driftwm/config.toml")
     if os.path.exists(cfg):
         row(OK, "config installed at ~/.config/driftwm")
@@ -5283,10 +5850,13 @@ def draw_overview(d, sel, size):
 
     # The names go on last, so each can see where the others landed. The Sun
     # keeps only its glyph: it is the one body nobody has to be told.
+    ringing = calls_by_planet()
     for p, r, c, lit in marks:
         if p is SUN:
             continue
         tag = "%s·%d" % (p.name, counts[p.n]) if counts.get(p.n) else p.name
+        if ringing.get(p.n):
+            tag = "✳" + tag         # the map is mission control: who calls
         sh.label(r, c, ("▸" + tag) if p is sel[0] else tag, lit)
 
     body = sh.lines()
@@ -5525,6 +6095,7 @@ CMDS = {"goto": cmd_goto, "hop": cmd_hop, "dive": cmd_dive, "system": cmd_system
         "gather": cmd_gather, "sweep": cmd_sweep, "tour": cmd_tour,
         "doctor": cmd_doctor, "first-light": cmd_first_light,
         "back": cmd_back, "find": cmd_find, "tidy": cmd_tidy, "homes": cmd_homes,
+        "signal": cmd_signal, "answer": cmd_answer,
         "focus": cmd_focus, "solo": cmd_solo, "present": cmd_present,
         "mode": cmd_mode, "pick": cmd_pick, "setup": cmd_setup,
         "session-ready": cmd_session_ready, "session": cmd_session,

@@ -36,6 +36,10 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 ctypes.CDLL("libgtk-layer-shell.so.0")
 PY
+python3 - <<'PY' || warn "signal ripples need python3-gi-cairo — the embers and the bar still work without it"
+import gi
+gi.require_foreign("cairo")
+PY
 
 # ── config ────────────────────────────────────────────────────────────────
 CFG="$HOME/.config/driftwm"
@@ -81,7 +85,7 @@ printf '%s\n' '#!/usr/bin/env python3' \
   '    solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
 sudo chmod 755 /usr/local/bin/sol
 sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
-                   bin/sol-session bin/driftwm-up /usr/local/bin/
+                   bin/sol-ripple bin/sol-session bin/driftwm-up /usr/local/bin/
 
 # The session a login screen offers, and the portal backends it uses. These
 # belong to the machine rather than to a person — every user picks sol from

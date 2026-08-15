@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""sol-ripple — the transmission: a signal, drawn as a drop into still water.
+
+When a district calls, the queue and the embers are the message; this is the
+event. A drop lands on the calling planet and sends out what a drop actually
+sends: not one ring but a train of them, each crest weaker than the last,
+from a centre that bobs as it settles. The leading crest crosses the canvas
+at a fixed speed, so what you see stays physically honest in the way sol
+keeps insisting on: a call from Mercury reaches a camera parked at Neptune
+visibly later than one from Venus, because distance from the Sun is distance
+from your attention — and the water says so.
+
+It is a layer-shell surface like the menu and the bar, not a canvas window:
+the crests are drawn in screen space over everything, transformed by the
+real camera each frame, so they are correct at any zoom and while flying.
+And it is the one layer surface that must never receive input — its whole
+input region is empty, so every click sails through it to whatever you were
+doing. A signal may call; it may not even *catch*.
+
+Drawing water cheaply is most of the craft here, and the ledger was written
+by a profiler, not by instinct — twice. The second pass measured the thing
+the first one missed: on a full-screen GTK surface over Wayland, a frame
+costs ~32ms of CPU *flat*, before a single pixel is painted — an empty draw
+with a hundred-pixel damage pays almost exactly what a full one does,
+because the toolkit reconciles the whole backing store on every commit. So
+the levers, in the order they matter: the number of frames; the life of the
+surface; and only then the pixels. Hence: film rate at the birth, where the
+eye is; a crawl once the train is only travelling; the surface *gone* — a
+short bow-out, then exit — the moment the leading crest has left the
+screen, because what the echoes would still say out there is a fact about
+the canvas, not a reason to keep a compositor compositing; one geometry
+computed per tick and shared by the painter and the damage, so they cannot
+disagree; every crest filled as an annulus, never a disc, and past the
+radius where the band is mush, not filled at all — the filament is the
+wave; the camera asked for two numbers, not the whole state.
+
+Garnish, not the meal. Every failure path here is a silent exit: the ember
+on the plate and the star in the bar have already said everything that must
+be said, and a desktop that errors because it could not draw a flourish
+would have its priorities exactly backwards.
+"""
+
+import ctypes
+import importlib.machinery
+import importlib.util
+import math
+import os
+import shutil
+import sys
+import time
+
+
+def hush():
+    raise SystemExit(0)                 # the flourish failing is not news
+
+
+# On a HiDPI output GTK quietly doubles the buffer, and every logical pixel
+# this surface touches becomes four device pixels — quadrupling the cost of
+# exactly the full-screen gradients this file works hardest to keep cheap.
+# Water is soft: rendered at buffer scale 1 and upscaled by the compositor,
+# the bands blur the way water blurs, and the filament lands two device
+# pixels wide instead of one, which is still an edge. Decided before GTK
+# loads, because the scale is read at init and never again.
+os.environ.setdefault("GDK_SCALE", "1")
+
+try:
+    import cairo
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    # The Context/Region bridge between pygobject and cairo is its own
+    # package (python3-gi-cairo on Debian), and without it the draw handler
+    # is called with an argument Python cannot unwrap. Asked for up front,
+    # where the answer is an exit rather than a surface that cannot paint.
+    gi.require_foreign("cairo")
+    from gi.repository import Gdk, GLib, Gtk           # noqa: E402
+except (ImportError, ValueError):
+    hush()
+
+
+# ── sol itself ────────────────────────────────────────────────────────────
+# The planets and the camera live in `sol`, and there must be one copy of
+# them — loaded exactly the way sol-menu loads them, working tree first.
+MODULES = ("/usr/lib/sol/solmod.py", "/usr/local/lib/sol/solmod.py")
+
+
+def load_sol():
+    tried = []
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol")
+    for path in (beside,) + MODULES + (shutil.which("sol"),):
+        if not path or not os.path.exists(path) or path in tried:
+            continue
+        tried.append(path)
+        loader = importlib.machinery.SourceFileLoader("sol_mod", path)
+        spec = importlib.util.spec_from_loader("sol_mod", loader)
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            loader.exec_module(mod)
+        except BaseException:
+            continue
+        if hasattr(mod, "PLANETS") and hasattr(mod, "Drift"):
+            return mod
+    hush()
+
+
+# ── the layer surface ─────────────────────────────────────────────────────
+# Same six functions sol-menu binds, minus the keyboard: mode NONE, because
+# this surface must be exactly as interactive as light.
+LAYER_OVERLAY = 3
+EDGES = (0, 1, 2, 3)                    # left, right, top, bottom
+KEYBOARD_NONE = 0
+
+try:
+    _shell = ctypes.CDLL("libgtk-layer-shell.so.0")
+except OSError:
+    hush()
+
+ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+
+
+def gpointer(obj):
+    return ctypes.c_void_p(
+        ctypes.pythonapi.PyCapsule_GetPointer(obj.__gpointer__, None))
+
+
+# ── the physics ───────────────────────────────────────────────────────────
+# One speed for every transmission, in canvas units, because the delay IS the
+# meaning: the leading crest crosses a neighbouring orbit in well under a
+# second and takes about four to cross the whole system — long enough to
+# read direction from, short enough to never be in the way.
+SPEED = 3000.0          # canvas units per second — a drop is quick
+RMAX = 7400.0           # a crest is spent once it has left even Neptune behind
+# Frames are the cost — measured: a frame that paints nothing at all pays
+# ~32ms of CPU in the toolkit's own plumbing, flat, whatever the damage —
+# so the frames go where the eye is. The birth is watched closely: the
+# impact, the bobbing centre, rings still tight enough to read as circles.
+# The cruise is a broad slow band nobody is tracking, and a crawl cannot be
+# told there.
+FPS = 18                # while the drop is being born — cheap frames that
+                        # *keep* this rate read smoother than 24 that miss it
+CRUISE_FPS = 8          # once the train is only travelling
+CRUISE_AT = 1.2         # seconds; the last rebound has left by here
+POLL = 3                # camera re-read every POLL frames — flying stays true
+TAIL = 420.0            # screen px behind a crest that can still hold paint
+FADE = 0.35             # seconds of bow-out once the wave has said its piece
+BODY_R = 900.0          # past this the band is mush; the filament is the wave
+
+WHITE = (1.0, 1.0, 1.0)
+
+# A drop, then its rebounds: the crests of the train, as (birth s, amplitude).
+# One ring reads as geometry; a drop in water sends a train of them, each
+# born from the centre bobbing as it settles, each weaker than the last. An
+# urgent call hits harder and rebounds more — a faster, denser train — so
+# urgency is legible even before the colour is.
+CRESTS = ((0.0, 1.0), (0.30, 0.55), (0.60, 0.30))
+URGENT_CRESTS = ((0.0, 1.15), (0.22, 0.85), (0.44, 0.60), (0.66, 0.42))
+
+
+def mix(a, b, t):
+    return tuple(x + (y - x) * t for x, y in zip(a, b))
+
+
+def main():
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    urgent = len(sys.argv) > 2 and sys.argv[2] not in ("0", "", "no")
+    if not 1 <= n <= 8:
+        hush()
+    mod = load_sol()
+    p = mod.PLANETS[n - 1]
+    # sol's own hex-to-floats, because the colour convention lives in sol.
+    colour = mod.rgb("#f7768e" if urgent else p.colour)
+    crests = URGENT_CRESTS if urgent else CRESTS
+    last_birth = crests[-1][0]
+
+    try:
+        d = mod.Drift()
+        view = {"cam": tuple(d.camera()), "zoom": d.zoom() or 1.0}
+    except (SystemExit, OSError, KeyError, ValueError, TypeError):
+        hush()
+
+    win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+    win.set_app_paintable(True)
+    visual = win.get_screen().get_rgba_visual()
+    if visual is None:
+        hush()
+    win.set_visual(visual)
+
+    g = gpointer(win)
+    _shell.gtk_layer_init_for_window(g)
+    _shell.gtk_layer_set_namespace(g, b"sol-ripple")
+    _shell.gtk_layer_set_layer(g, LAYER_OVERLAY)
+    _shell.gtk_layer_set_keyboard_mode(g, KEYBOARD_NONE)
+    for edge in EDGES:
+        _shell.gtk_layer_set_anchor(g, edge, 1)
+    _shell.gtk_layer_set_exclusive_zone(g, -1)
+
+    # Exactly as interactive as light: an empty input region, set before the
+    # surface ever maps, so not even the first frame can catch a click meant
+    # for a window underneath. Realized by hand for exactly that reason —
+    # and if the region cannot be set, the surface must never appear: a
+    # flourish that ate one click would be worse than no flourish at all.
+    win.realize()
+    try:
+        win.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+    except (KeyError, TypeError, AttributeError):
+        hush()
+
+    born = time.monotonic()
+    # One beat's truth, shared: tick() computes the geometry once and leaves
+    # it here for draw(), so the painter and the damage cannot disagree —
+    # they are looking at the same list. `fade` is when the bow-out began.
+    frame = {"i": 0, "prev": None, "cruising": False,
+             "fade": None, "stash": None}
+
+    def centre(w, h):
+        z = view["zoom"]
+        cx, cy = view["cam"]
+        return (w / 2.0 + (p.x - cx) * z,
+                h / 2.0 - (p.y - cy) * z)          # the canvas is Y-up
+
+    def crest_band(R, z):
+        """How broad a crest is, in screen px: sharp at birth, broad far out
+        (dispersion), and one formula — the painter and the damage logic
+        must never disagree about where paint can be."""
+        return min(120.0, max(24.0, 340.0 * z)) * (1.0 + 0.8 * R / RMAX)
+
+    def train(age, z, near, far):
+        """Every crest currently worth drawing: (r, band, env) per crest.
+
+        Two things age a crest the way water ages one: the band broadens as
+        it travels (dispersion), and the amplitude falls as the drop's
+        energy is shared around a growing circumference. A crest that has
+        not arrived, or has wholly left, or has faded past seeing, is not
+        in the list — which is what makes it free.
+        """
+        out = []
+        for birth, amp in crests:
+            R = SPEED * (age - birth)
+            r = R * z
+            if r <= 2.0:
+                continue
+            life = max(0.0, 1.0 - R / RMAX)
+            env = amp * life ** 1.35 / math.sqrt(1.0 + R / 2400.0)
+            band = crest_band(R, z)
+            # 0.02 of a 52%-alpha stop is one per cent of alpha — the floor
+            # is set where the eye gives up, not where the float does.
+            if env <= 0.02 or r + 10.0 < near or r - band - 14.0 > far:
+                continue
+            out.append((r, band, env))
+        return out
+
+    def draw(widget, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        stash = frame["stash"]
+        if not stash:
+            return False
+        age, sx, sy, crest_list, dim = stash
+
+        for i, (r, band, amp_env) in enumerate(crest_list):
+            env = amp_env * dim
+            inner = max(0.0, r - band)
+            # The body gradient only while the band is tight enough to read
+            # as one: past BODY_R it is a broad wash the strokes carry
+            # better, and it was the single most expensive paint here.
+            if r <= BODY_R:
+                body = cairo.RadialGradient(sx, sy, inner, sx, sy, r)
+                body.add_color_stop_rgba(0.0, *colour, 0.0)
+                body.add_color_stop_rgba(0.55, *colour, 0.10 * env)
+                body.add_color_stop_rgba(0.86, *mix(colour, WHITE, 0.2), 0.30 * env)
+                body.add_color_stop_rgba(1.0, *mix(colour, WHITE, 0.42), 0.52 * env)
+                # The annulus, never the disc: cairo rasterises what the
+                # path holds, and the path holds only the band.
+                cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+                cr.set_source(body)
+                cr.arc(sx, sy, r, 0, 2 * math.pi)
+                cr.new_sub_path()
+                cr.arc(sx, sy, inner, 0, 2 * math.pi)
+                cr.fill()
+
+            cr.set_line_width(6.0)                      # the bloom
+            cr.set_source_rgba(*colour, 0.15 * env)
+            cr.arc(sx, sy, r, 0, 2 * math.pi)
+            cr.stroke()
+            cr.set_line_width(1.5)                      # the filament
+            cr.set_source_rgba(*mix(colour, WHITE, 0.5), 0.85 * env)
+            cr.arc(sx, sy, r, 0, 2 * math.pi)
+            cr.stroke()
+
+            # The dotted wake — the idiom the map and the shader already use
+            # for orbits — belongs to the leading crest only: a wake belongs
+            # to the wave, not to every echo of it. It rides at the band's
+            # own foot rather than trailing far behind, because every pixel
+            # between the innermost paint and the front is damage the whole
+            # pipeline pays for, three times, every frame.
+            wake = r - band * 0.95
+            if i == 0 and wake > 2.0:
+                cr.save()
+                cr.set_dash([1.5, 6.5])
+                cr.set_line_width(1.0)
+                cr.set_source_rgba(*colour, 0.22 * env ** 1.6)
+                cr.arc(sx, sy, wake, 0, 2 * math.pi)
+                cr.stroke()
+                cr.restore()
+
+        # The centre bobs as the drop settles: a flash at the impact, then a
+        # smaller one as each rebound leaves, each collapsing inward — so
+        # the energy visibly goes somewhere rather than switching off.
+        for birth, amp in crests:
+            k = age - birth
+            if 0.0 <= k < 0.55:
+                gone = (1.0 - k / 0.55) * dim
+                rad = (8.0 + 22.0 * (1.0 - k / 0.55)) * min(1.0, amp + 0.2)
+                halo = cairo.RadialGradient(sx, sy, 0, sx, sy, rad)
+                halo.add_color_stop_rgba(0, *mix(colour, WHITE, 0.65),
+                                         0.7 * gone * amp)
+                halo.add_color_stop_rgba(0.35, *colour, 0.45 * gone * amp)
+                halo.add_color_stop_rgba(1, *colour, 0)
+                cr.set_source(halo)
+                cr.arc(sx, sy, rad, 0, 2 * math.pi)
+                cr.fill()
+        return False
+
+    area = Gtk.DrawingArea()
+    area.connect("draw", draw)
+    win.add(area)
+
+    def clamp(w, h, x0, y0, x1, y1):
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        x1, y1 = min(int(w), int(x1)), min(int(h), int(y1))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def ring_rects(w, h, sx, sy, r_out, r_in):
+        """The screen a ring's band can have touched, as up to four rects.
+
+        A crest only ever paints its annulus, so the damage is a frame
+        around a hole, not a disc: the interior the wave has already left
+        is finished pixels, and re-clearing and re-blitting them every
+        frame was most of what this surface cost. The hole is the square
+        inscribed in the inner circle — the largest rectangle provably
+        untouched — and the frame is what remains of the bounding square.
+        """
+        out = []
+        if r_in < 48.0:                 # not worth a hole; one square
+            box = clamp(w, h, sx - r_out, sy - r_out, sx + r_out, sy + r_out)
+            return [box] if box else []
+        half = r_in / math.sqrt(2.0) - 2.0
+        for x0, y0, x1, y1 in (
+                (sx - r_out, sy - r_out, sx + r_out, sy - half),   # above
+                (sx - r_out, sy + half, sx + r_out, sy + r_out),   # below
+                (sx - r_out, sy - half, sx - half, sy + half),     # left
+                (sx + half, sy - half, sx + r_out, sy + half)):    # right
+            box = clamp(w, h, x0, y0, x1, y1)
+            if box:
+                out.append(box)
+        return out
+
+    def tick():
+        frame["i"] += 1
+        if frame["i"] % POLL == 0:
+            # Two numbers, not the whole state: the window list is most of
+            # the state reply, and the ripple has no use for a window.
+            try:
+                view["cam"] = tuple(d.camera())
+                view["zoom"] = d.zoom() or view["zoom"]
+            except (SystemExit, OSError, KeyError, ValueError, TypeError):
+                Gtk.main_quit()          # the compositor left; so did we
+                return False
+        age = time.monotonic() - born
+        w = area.get_allocated_width()
+        h = area.get_allocated_height()
+        if not (w and h):
+            return True
+
+        z = view["zoom"]
+        sx, sy = centre(w, h)
+        near = math.hypot(sx - min(max(sx, 0.0), w),
+                          sy - min(max(sy, 0.0), h))
+        far = max(math.hypot(sx - ex, sy - ey)
+                  for ex in (0.0, w) for ey in (0.0, h))
+
+        # The wave has said its piece when the LEADING crest has left the
+        # screen — what the echoes would still say out there is a fact about
+        # the canvas, not a reason to keep a compositor compositing. A short
+        # bow-out instead of a cut, so nothing pops off mid-screen; RMAX is
+        # the fallback for a view so wide the front never leaves it.
+        gone = (SPEED * age * z - TAIL > far
+                or SPEED * (age - last_birth) > RMAX)
+        if gone and frame["fade"] is None:
+            frame["fade"] = age
+        if frame["fade"] is not None and age - frame["fade"] >= FADE:
+            Gtk.main_quit()
+            return False
+        dim = (1.0 if frame["fade"] is None
+               else max(0.0, 1.0 - (age - frame["fade"]) / FADE))
+
+        # One geometry for this beat, shared with draw() — the culling that
+        # decides what is worth painting is the same culling that decides
+        # what is worth damaging, by construction.
+        crest_list = train(age, z, near, far)
+        frame["stash"] = (age, sx, sy, crest_list, dim)
+
+        rects = []
+        for r, band, _ in crest_list:
+            rects += ring_rects(w, h, sx, sy, r + 12.0,
+                                max(0.0, r - band - 14.0))
+        for birth, _ in crests:
+            if 0.0 <= age - birth < 0.6:  # the settling centre, one box
+                box = clamp(w, h, sx - 44, sy - 44, sx + 44, sy + 44)
+                if box:
+                    rects.append(box)
+                break
+        was = frame["prev"] or []
+        frame["prev"] = rects
+        if rects or was:
+            for b in was + rects:        # the union: erase there, paint here
+                area.queue_draw_area(*b)
+        if age >= CRUISE_AT and not frame["cruising"]:
+            frame["cruising"] = True
+            GLib.timeout_add(1000 // CRUISE_FPS, tick)
+            return False                 # hand the beat to the slower clock
+        return True
+
+    GLib.timeout_add(1000 // FPS, tick)
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

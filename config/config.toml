@@ -137,6 +137,10 @@ animate_fps = 30
 "mod+tab" = "spawn sol menu go"     # the switcher: type a place, go
 "mod+shift+f" = "spawn sol find"   # ... and the one for things, not places
 "mod+minus" = "spawn sol back"     # where the camera was before the last flight
+# A calling district wears an ember on its plate and a star in the bar —
+# `sol signal` is how anything announces, and this is how you answer.
+# Arriving clears it; there is nothing else to manage.
+"mod+s" = "spawn sol answer"       # fly to the oldest call
 "mod+slash" = "spawn sol-help"
 "mod+e" = "spawn sol-map"          # the overview: everything, named, on demand
 "mod+semicolon" = "spawn sol-cmd"  # the command line, in the footer

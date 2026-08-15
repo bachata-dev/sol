@@ -441,6 +441,50 @@ Press `mod+/` for the card, any time:
 
 ![keybindings](screenshots/help.png)
 
+## When a place wants you
+
+A notification is a message about a thing, delivered on top of whatever you were doing. sol has
+something better to point at: the place the thing happened. **A signal is light from a place.**
+
+```sh
+sol signal "tests green"              # this district calls, with a message
+sol signal --at mars "review ready"   # that one
+sol signal --urgent "deploy failed"   # a red call
+sol signal -- make -j8                # run it, then call by its exit code
+```
+
+When a district calls, the call is *transmitted*: a drop lands on the planet and sends what a drop
+actually sends — a train of crests in the district's colour, each weaker than the last, from a
+centre that bobs as it settles, broadening as they travel. The leading crest crosses the canvas at
+one fixed speed, so a call from the next orbit reaches you at once and one from Neptune takes
+visibly longer, which is the same sentence the whole layout speaks. An urgent call hits harder and
+rebounds more. Zoomed into your work, an off-screen call still crosses your view as an arc entering
+from the side it came from: you feel the direction the way you hear a door open behind you. The
+water is drawn on a click-through layer surface — exactly as interactive as light. Then what persists is
+quiet: the district's name plate wears an ember — `✳  4  M A R S  ops · 3` — its chip in the bar
+keeps its colour and gains a star (amber for routine, red for urgent), the map marks it, and the
+footer says it once: `✳ Mars · tests green`. Nothing slides in, nothing covers your work, and the
+camera does not move — the one rule holds for signals too. They may call; they never drag.
+
+**`mod+s` answers.** It flies you to the oldest call, urgent ones first. And arrival is the
+acknowledgement: arriving at a district clears its calls, however you arrive — `mod+s`, `mod+4`,
+a four-finger swipe, a drag. Arriving, not merely being there: a camera parked on Mars overnight
+does not eat the calls Mars makes while you sleep. There are no dismiss buttons and no unread pile
+to manage, because the camera only ever moves when you move it, so the camera arriving *is* your
+attention arriving. A dark sky means nothing waits.
+
+This is what makes sol a desktop for running agents. Give each one a district — the terminal with
+the refactor on Mars, the one writing tests on Jupiter — put `sol signal done` in the agent's
+finish hook (or export `SOL_AT=mars` in its shell and let every call from there attribute itself),
+and the question that actually burns while five things run — *which one needs me?* — is answered
+from orbit, by glancing at the sky. The `--` form exists because a deferred call asks "where am I"
+at the wrong moment: `make && sol signal done` fires after you have flown away, so `sol signal --
+make` reads the place when the work *starts*, colours the call by the exit code, and exits with
+that code so pipelines cannot tell it was there.
+
+`sol signal` with nothing to say lists what is still calling; `sol answer` with nothing calling
+says so and stays put.
+
 ## Install
 
 On Debian or Ubuntu, take the `.deb` from the
@@ -529,7 +573,8 @@ every press, every menu item and every click in the bar.
 
 **Requirements:** [driftwm](https://github.com/malbiruk/driftwm), `foot`, `python3`, `awk`;
 `python3-gi` (GTK 3) and `gtk-layer-shell` for the `☉` context menu — without them right-click has
-nothing to open and everything else works; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
+nothing to open and everything else works; `python3-gi-cairo` as well for the signal ripples —
+without it the embers and the bar still say everything, just without the water; optionally `waybar`, `fuzzel`, `mako`; JetBrains Mono
 plus a Nerd Font for the bar glyphs.
 [Omarchy](https://omarchy.org) keybindings light up automatically if omarchy is installed, and are
 harmless if not.

@@ -57,7 +57,7 @@ STUB
 chmod 755 "$ROOT/usr/bin/sol"
 
 install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
-              bin/sol-session bin/sol-planetarium bin/sol-spin \
+              bin/sol-ripple bin/sol-session bin/sol-planetarium bin/sol-spin \
               bin/driftwm-up bin/driftwm-background-next "$ROOT/usr/bin/"
 
 # The two files that are the machine's business rather than a person's, and

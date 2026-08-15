@@ -1374,6 +1374,127 @@ def test_typing(mod):
             pass
 
 
+# ── 21. signals: attention as light from a place ──────────────────────────
+def test_signals(mod):
+    print("\n21. a place can call for you, and looking answers it")
+    try:
+        os.remove(mod.SIGNALS)
+    except OSError:
+        pass
+
+    r = sol("signal")
+    check("a quiet sky says so", "nothing is calling" in r.stdout, r.stdout)
+
+    # From Neptune, so the watcher standing somewhere is not standing on the
+    # districts this test lights up — looking at a district answers it, which
+    # is the last check here, not an accident in the middle.
+    sol("goto", "8")
+    time.sleep(1.6)
+
+    r = sol("signal", "--at", "mars", "tests green")
+    check("signal --at names a place", r.returncode == 0, r.stderr)
+    calls = mod.read_signals()
+    check("the call is written down",
+          len(calls) == 1 and calls[0]["n"] == 4
+          and calls[0]["text"] == "tests green", str(calls))
+    check("the plate wears the ember",
+          "✳" in mod.plate_line(mod.PLANETS[3], 0, calls), "no ✳ in the plate")
+    marked = mod.chip(mod.PLANETS[3], 0, None, calls)
+    check("the chip keeps its colour and gains a star",
+          "✶" in marked and mod.PLANETS[3].colour in marked, marked)
+
+    r = sol("signal", "--at", "nowhere", "x")
+    check("an unknown place is refused", r.returncode != 0, r.stdout)
+
+    r = sol("signal", "--at", "venus", "--", "false")
+    check("a wrapped failure keeps its exit code", r.returncode == 1,
+          "exit %d" % r.returncode)
+    venus = [s for s in mod.read_signals() if s["n"] == 2]
+    check("...and calls urgent", venus and venus[-1].get("urgent"), str(venus))
+
+    r = sol("signal", "--at", "venus", "--", "true")
+    check("a wrapped success exits 0", r.returncode == 0, str(r.returncode))
+
+    # mod+s: the urgent call outranks the older routine one.
+    sol("answer")
+    time.sleep(1.6)
+    cx, cy = mod.active_output(state())["camera"]
+    near, _ = mod.nearest(cx, cy)
+    check("answer flies to the urgent call first", near.n == 2,
+          "landed nearest %s" % near.name)
+    time.sleep(1.2)          # a beat for the heartbeat's own look-to-clear
+    check("arriving answers everything from there",
+          not [s for s in mod.read_signals() if s["n"] == 2],
+          str(mod.read_signals()))
+
+    # No verb at all: flying there by hand answers it just the same.
+    sol("goto", "4")
+    time.sleep(1.6)
+    sol("here")
+    check("looking at a district answers it", not mod.read_signals(),
+          str(mod.read_signals()))
+
+
+def test_waking(mod):
+    print("\n22. a bar that has only just started is not killed by being told")
+
+    import signal as _sig
+    check("the bar is up at all", mod.waking("waybar"),
+          "no waybar found — the header and footer are not running")
+
+    # The regression this stands on. Every signal sol sends a reader is one
+    # whose default action is to terminate it, so signalling a reader that has
+    # not installed its handler yet kills it — and driftwm's autostart starts
+    # waybar six milliseconds before `sol watch`, which then signals it. On a
+    # slow machine waybar lost that race at every single login and the session
+    # came up with no header and no footer, leaving nothing in the log but the
+    # shell's own "Real-time signal 8". So: start one, and tell it at once.
+    conf = os.path.expanduser("~/.config/driftwm/waybar.jsonc")
+    css = os.path.expanduser("~/.config/driftwm/waybar.css")
+    if not os.path.exists(conf):
+        check("a waybar config to test against", False, conf)
+        return
+    baby = subprocess.Popen(["waybar", "-c", conf, "-s", css],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    try:
+        deaf_at_first = False
+        for _ in range(40):
+            mod.waking.__defaults__[1].clear()     # a fresh /proc scan each round
+            if not mod.listening(baby.pid, _sig.SIGRTMIN + mod.BAR_SIGNAL):
+                deaf_at_first = True
+            mod.wake("waybar", _sig.SIGRTMIN + mod.BAR_SIGNAL)
+            mod.wake("waybar", _sig.SIGRTMIN + mod.LAST_SIGNAL)
+            if baby.poll() is not None:
+                break
+            time.sleep(0.01)
+        check("a starting bar survives the watcher's first refresh",
+              baby.poll() is None,
+              "waybar died of a signal it had no handler for yet")
+        check("...because it was seen to be deaf and skipped, not blindly told",
+              deaf_at_first, "waybar had handlers up before the first look; "
+                             "the race was not actually exercised")
+        # And once it is up it must really be signalled, or the fix would be
+        # "never wake the bar", which passes the test above and breaks the bar.
+        for _ in range(200):
+            if mod.listening(baby.pid, _sig.SIGRTMIN + mod.BAR_SIGNAL):
+                break
+            time.sleep(0.05)
+        check("a started bar is listening, and is told",
+              mod.listening(baby.pid, _sig.SIGRTMIN + mod.BAR_SIGNAL),
+              "waybar never installed a handler")
+        mod.wake("waybar", _sig.SIGRTMIN + mod.BAR_SIGNAL)
+        time.sleep(0.3)
+        check("...and lives through it", baby.poll() is None, "it died")
+    finally:
+        baby.terminate()
+        try:
+            baby.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            baby.kill()
+        mod.waking.__defaults__[1].clear()
+
+
 def main():
     want = sys.argv[1:]
     mod = load_sol()
@@ -1387,7 +1508,8 @@ def main():
         ("geometry", test_mode_geometry), ("paint", test_mode_paint),
         ("focus", test_focus_live), ("follows", test_mode_follows),
         ("exclusive", test_mode_exclusive), ("settling", test_settling),
-        ("typing", test_typing),
+        ("typing", test_typing), ("signals", test_signals),
+        ("waking", test_waking),
     ]
     print("%ssol acceptance — %d groups, live canvas%s"
           % (DIM, len(tests), OFF))
