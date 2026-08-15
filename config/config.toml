@@ -23,8 +23,10 @@ window_placement = "cursor"
 
 autostart = [
   "waybar -c ~/.config/driftwm/waybar.jsonc -s ~/.config/driftwm/waybar.css",
-  # the footer: what sol last did, and the command line you can open over it
-  "waybar -c ~/.config/driftwm/waybar-footer.jsonc -s ~/.config/driftwm/waybar.css",
+  # the footer: one strip, two registers — a status line until mod+; makes
+  # the same 28 pixels the command line. Without GTK it execs the waybar
+  # footer it replaced, so the strip is never simply missing.
+  "sol-footer",
   "mako",
   # Catches windows you drag from one planet to another — and, because it is
   # the one process already subscribed to the compositor, writes the bar and
@@ -143,7 +145,10 @@ animate_fps = 30
 "mod+s" = "spawn sol answer"       # fly to the oldest call
 "mod+slash" = "spawn sol-help"
 "mod+e" = "spawn sol-map"          # the overview: everything, named, on demand
-"mod+semicolon" = "spawn sol-cmd"  # the command line, in the footer
+# The command line, in the footer — the strip itself, addressed. sol-cmd
+# still exists as a shim for configs that learned the old name; shipped
+# configs call the real one, or the shim can never be retired.
+"mod+semicolon" = "spawn sol-footer toggle"
 
 # ── a crowded planet ──
 # mod+a tidies the windows of wherever you are into a grid; mod+n / mod+p
@@ -361,7 +366,9 @@ decoration = "none"
 focus_on_open = false
 opacity = 0.0
 
-# The command line, sitting just above the footer it belongs to.
+# The command line, when it has to be a window at all: the footer itself is
+# the prompt now, and this rule only dresses the foot terminal that stands
+# in for it on a machine without GTK.
 [[window_rules]]
 app_id = "sol-cmd"
 pinned_to_screen = true

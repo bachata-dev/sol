@@ -84,7 +84,7 @@ printf '%s\n' '#!/usr/bin/env python3' \
   'if __name__ == "__main__":' \
   '    solmod.main()' | sudo tee /usr/local/bin/sol >/dev/null
 sudo chmod 755 /usr/local/bin/sol
-sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd \
+sudo install -m755 bin/sol-menu bin/sol-help bin/sol-map bin/sol-cmd bin/sol-footer \
                    bin/sol-ripple bin/sol-session bin/sol-mcp \
                    bin/driftwm-up /usr/local/bin/
 

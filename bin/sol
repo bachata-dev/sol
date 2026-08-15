@@ -96,7 +96,7 @@ SYSTEM_R = 6800        # outermost orbit, at aphelion
 # The one place the version is written down. The Debian package reads it from
 # here rather than carrying its own, because two numbers that must agree are
 # one number and a bug waiting for the release you forget to edit twice.
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # Where the code lives when it is installed, in the two layouts it can be
 # installed in: /usr under a package, /usr/local from install.sh, which is the
@@ -1264,6 +1264,28 @@ def rgb(hexcolour):
     return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
+def layer_shell():
+    """The gtk-layer-shell binding, bound once for every surface sol owns.
+
+    The menu, the ripple and the footer all speak to the same library
+    through the same PyCapsule bridge, and three private copies of a ctypes
+    prototype mutation is three chances for them to drift about the very
+    same singleton. Returns (lib, gpointer); raises OSError where the
+    library is missing, which every caller treats as "fall back".
+    """
+    import ctypes
+    lib = ctypes.CDLL("libgtk-layer-shell.so.0")
+    ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
+    ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [ctypes.py_object,
+                                                      ctypes.c_char_p]
+
+    def gpointer(obj):
+        return ctypes.c_void_p(
+            ctypes.pythonapi.PyCapsule_GetPointer(obj.__gpointer__, None))
+
+    return lib, gpointer
+
+
 def mode_now():
     """The mode that is on, as it was written down — or {} for none."""
     try:
@@ -2097,8 +2119,13 @@ def flip_chrome():
     not say which way it is. What keeps the two ends honest is the `chrome`
     flag in the mode's own record: present is the only thing that flips it,
     and leaving present is the only thing that flips it back.
+
+    The footer strip gets the same toggle on SIGUSR2 — a different number
+    only because USR1 is already how sol-footer is knocked on for its
+    command line, and hiding is not that.
     """
     wake("waybar", signal.SIGUSR1)
+    wake("sol-footer", signal.SIGUSR2)
 
 
 def notifications(on):
@@ -4005,6 +4032,9 @@ LAST_SIGNAL = 9           # the footer alone, which ticks on its own
 READERS = {
     "waybar": ("waybar", ("waybar",)),
     "plates": ("label.sh", ("sh", "dash", "bash", "ash", "busybox")),
+    # The footer strip is a python script behind an env shebang, so its comm
+    # is the interpreter's; the marker in the command line is what names it.
+    "sol-footer": ("sol-footer", ("sol-footer", "python3", "python")),
 }
 
 
@@ -4057,6 +4087,13 @@ def waking(who, ttl=15.0, _seen={}):
             # rather than warns about.
             if who == "plates" and not (len(argv) > 1
                                         and argv[1].endswith(want)):
+                continue
+            # The knock shares the resident's name: `sol-footer toggle` is a
+            # transient that installs no handler and never will, told apart
+            # by its own argument — the same rule residents() applies from
+            # the other side, kept here too so the two filters cannot
+            # disagree about what counts as a reader.
+            if who == "sol-footer" and b"toggle" in argv:
                 continue
             with open("/proc/%s/comm" % entry) as f:
                 if f.read().strip() in comms:
@@ -4240,6 +4277,45 @@ def key_of(argv):
             "prev": "mod+p", "dive": "pinch out", "back": "mod+-",
             "find": "mod+shift+f", "tidy": "mod+shift+a",
             "answer": "mod+s"}.get(cmd, "")
+
+
+# ── What every prompt surface knows about the verbs ──────────────────────
+# One table, read by the footer strip and the foot fallback alike, so the
+# two prompts cannot complete different vocabularies or describe one command
+# two ways. PHRASE is the breath a ghost says a verb in; ANSWERING marks the
+# commands whose stdout is the point — run them with the answer kept, or
+# the user typed a question into silence; PLACE_ARG marks the verbs whose
+# next word is a place, so tab knows what to offer.
+PHRASE = {
+    "goto": "go to a place", "hop": "the next planet along",
+    "system": "frame the whole system", "send": "send the focused window",
+    "arrange": "tidy this planet into its grid", "back": "the camera to where it was",
+    "next": "step to the next window here", "prev": "step back through them",
+    "find": "fly to a window by name", "tidy": "gather · arrange all · sweep",
+    "gather": "bring every adrift window home", "sweep": "drain this stack to the archive",
+    "focus": "tile this planet over the screen", "solo": "one window, a column wide",
+    "present": "nothing of sol showing", "night": "the evening palette",
+    "dark": "turn the Sun down", "mode": "which mode is on",
+    "signal": "light from a place", "answer": "fly to the oldest call",
+    "here": "where am I?", "list": "what is where",
+    "homes": "which app lives on which planet", "doctor": "is this machine set up right?",
+    "help": "the keybinding card", "map": "the overview",
+    "menu": "the context menu", "tour": "a narrated first flight",
+    "shift": "move the window a slot", "dive": "drop into the window here",
+}
+ANSWERING = {"here", "list", "homes", "mode", "doctor", "plate", "bar"}
+PLACE_ARG = {"goto", "send", "gather", "sweep", "arrange", "focus"}
+
+
+def place_words():
+    """Every spelling a place answers to — name, role, number."""
+    return [p.name.lower() for p in PLACES] + [p.role for p in PLACES] + \
+        [str(p.n) for p in PLANETS]
+
+
+def completion_words():
+    """The whole prompt vocabulary: verbs first, then the places."""
+    return sorted(CMDS) + place_words()
 
 
 _SAY = []
@@ -4699,8 +4775,7 @@ def cmd_prompt(args):
     because "jupiter" is what you would type if nobody had told you a verb
     was expected.
     """
-    words = sorted(CMDS) + [p.name.lower() for p in PLACES] + \
-        [p.role for p in PLACES] + [str(p.n) for p in PLANETS]
+    words = completion_words()
     try:
         import readline
 
@@ -5447,19 +5522,30 @@ def cmd_doctor(args):
         if not shutil.which("waybar"):
             # Recommends, not Depends: a bar-less install is a choice, and a
             # diagnostic that calls a choice a crash is the one lying.
-            row(WARN, "waybar is not installed — no header, no footer "
+            row(WARN, "waybar is not installed — no header "
                       "(it is a Recommends; sol works without it)")
+        elif any(b"waybar.jsonc" in cmdline(pid) for pid in waking("waybar")):
+            row(OK, "the header is running")
         else:
-            for conf, what in (("waybar.jsonc", "header"),
-                               ("waybar-footer.jsonc", "footer")):
-                if any(conf.encode() in cmdline(pid)
-                       for pid in waking("waybar")):
-                    row(OK, "the %s is running" % what)
-                else:
-                    row(BAD, "the %s is not running — driftwm's autostart "
-                             "starts it, so it started and died. driftwm's "
-                             "log has the reason: %s"
-                             % (what, runtime("sol-session.log")))
+            row(BAD, "the header is not running — driftwm's autostart "
+                     "starts it, so it started and died. driftwm's "
+                     "log has the reason: %s" % runtime("sol-session.log"))
+        # The footer is its own surface now: the sol-footer strip where the
+        # machine can host one, the waybar fallback where it cannot — either
+        # is a footer that is up, and asking only for the old one made
+        # doctor call the replacement a crash.
+        strip = waking("sol-footer")
+        fallback = any(b"waybar-footer.jsonc" in cmdline(pid)
+                       for pid in waking("waybar"))
+        if strip:
+            row(OK, "the footer is running")
+        elif fallback:
+            row(OK, "the footer is running (the waybar fallback — no GTK "
+                    "strip on this machine)")
+        else:
+            row(BAD, "the footer is not running — driftwm's autostart "
+                     "starts it, so it started and died. driftwm's "
+                     "log has the reason: %s" % runtime("sol-session.log"))
 
     cfg = os.path.expanduser("~/.config/driftwm/config.toml")
     if os.path.exists(cfg):

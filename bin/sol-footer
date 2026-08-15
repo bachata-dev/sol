@@ -1,0 +1,877 @@
+#!/usr/bin/env python3
+"""sol-footer — the strip along the bottom, both of its registers.
+
+The footer used to be two programs pretending to be one surface: a waybar
+that could report but never listen, and a foot terminal hired for the
+listening, spawned above the strip and killed on the way back out. Every
+awkward thing about the pair — the spawn, the pgrep/pkill toggle, the window
+rule, the bordered box that floated near the footer without being it — was
+the seam between a strip that speaks and a strip that hears.
+
+This is one resident surface with two registers, which is what a bottom
+strip has meant since vi put its command line inside its status line. At
+rest it reports: what sol last did, the event a shade brighter than its
+timestamp, and a signal in the colour of the district that sent it.
+Addressed — mod+; or a click on the ☉ ▸ that was always shaped like a
+prompt — the same 28 pixels listen: the cursor lights after the glyph, the
+echo yields its half of the line to a ghost that says what enter will do
+before you press it, and esc hands the keyboard back. Nothing opens,
+nothing docks, nothing was ever separate.
+
+It is a layer-shell strip, the same species of surface as sol-menu, so the
+canvas neither scales it nor swallows clicks for it — and it holds the
+keyboard only while addressed. The one case a line cannot hold (`list`,
+`doctor`) grows the strip the rows it needs and gives them back on the next
+keypress, which is the minibuffer's move and emacs has kept it for forty
+years because it is right.
+
+On a machine without GTK it execs the waybar footer it replaced, so the
+strip is never simply missing; `sol-footer toggle` is how anything else
+knocks — the keybinding, the bar, and sol-cmd, which is now just the knock.
+"""
+
+import ctypes
+import difflib
+import importlib.machinery
+import importlib.util
+import os
+import shutil
+import signal as signals
+import sys
+import time
+
+# ── The strip's whole appearance, in one place ────────────────────────────
+HEIGHT = 28
+CSS = b"""
+window { background-color: transparent; }
+.strip {
+  background-color: alpha(#12121a, 0.92);
+  border-top: 1px solid alpha(#7aa2f7, 0.06);
+  font-family: "JetBrains Mono"; font-size: 11px;
+}
+.strip.hot { border-top: 1px solid alpha(#7aa2f7, 0.35); }
+/* An EventBox draws a CSS background but does not honour CSS padding (a
+   lesson sol-menu learned first), so the boxes carry their washes and the
+   labels inside them carry the inset. The sun is set exactly as the header
+   sets it: the glyph comes from Noto Sans Symbols2, whose ascent floats it
+   above the line, and the same 5px of top padding puts it back down. One
+   sun at each edge of the screen, on the same vertical and the same 14px
+   in from its corner. */
+.door        { background-color: transparent; }
+.door:hover  { background-color: alpha(#c0caf5, 0.08); }
+.door.open   { background-color: alpha(#f0d99a, 0.10); }
+.door label {
+  padding: 5px 10px 0 14px;
+  font-family: "Noto Sans Symbols2", "Noto Sans Symbols", sans-serif;
+  font-size: 13px;
+}
+.line        { padding: 0 2px; }
+.ghost       { padding: 0 6px; }
+.echo        { background-color: transparent; }
+.echo:hover  { background-color: alpha(#c0caf5, 0.08); }
+.echo label  { padding: 0 14px 0 8px; }
+.esc {
+  color: #414868; font-size: 9px;
+  border: 1px solid #2a2d3f; border-radius: 4px;
+  padding: 0 5px; margin: 6px 10px 6px 4px;
+}
+.grown {
+  background-color: alpha(#12121a, 0.92);
+  border-top: 1px solid alpha(#7aa2f7, 0.35);
+  font-family: "JetBrains Mono"; font-size: 11px;
+  padding: 8px 16px 4px 16px;
+}
+"""
+
+FG, DIM, DIMMER, SUNC, ERR = "#c0caf5", "#565f89", "#414868", "#f0d99a", "#f7768e"
+
+# What the old halves were, kept as the fallback for a machine without GTK:
+# the waybar strip for the resident half, the foot terminal for the knock.
+WAYBAR = ["waybar", "-c", os.path.expanduser("~/.config/driftwm/waybar-footer.jsonc"),
+          "-s", os.path.expanduser("~/.config/driftwm/waybar.css")]
+FOOT = ["foot", "-a", "sol-cmd",
+        "-o", "main.font=JetBrains Mono:size=11", "-o", "colors.alpha=0.94",
+        "-o", "colors.background=16161e", "-o", "colors.foreground=c0caf5",
+        "-o", "main.pad=10x6", "-e", "sol", "prompt"]
+
+
+# ── Finding the other one ─────────────────────────────────────────────────
+def residents():
+    """Every running resident sol-footer that is not this process.
+
+    `pkill` cannot be trusted with this: a toggle matches the pattern as
+    surely as the strip it means to knock on, so the knock is told apart by
+    its own argument.
+    """
+    mine, out = os.getpid(), []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == mine:
+            continue
+        try:
+            with open("/proc/%s/cmdline" % entry, "rb") as f:
+                argv = f.read().split(b"\0")
+        except OSError:
+            continue
+        if any(a.endswith(b"sol-footer") for a in argv) and b"toggle" not in argv:
+            out.append(int(entry))
+    return out
+
+
+def can_strip():
+    """Whether this machine can host the GTK strip at all.
+
+    One answer, asked by every fallback door. The knock used to test for
+    `gi` alone while becoming a strip also needs the Gtk3 typelib and
+    libgtk-layer-shell — and on the machine in between, the doors disagreed:
+    each knock re-execed a would-be strip that fell back to a fresh waybar,
+    stacking one footer per keypress, while the foot prompt this machine
+    should have had was never reached.
+    """
+    if importlib.util.find_spec("gi") is None:
+        return False
+    try:
+        ctypes.CDLL("libgtk-layer-shell.so.0")
+    except OSError:
+        return False
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("Gdk", "3.0")
+    except (ImportError, ValueError):
+        return False
+    return True
+
+
+def knock():
+    """Ask the resident strip to open its prompt — or become it.
+
+    A missing resident is not an error to report, it is a footer to start:
+    the session where autostart lost a race still deserves a command line.
+    Without the strip's needs met, the old pair still works, so the knock
+    falls back to the foot terminal exactly as sol-cmd always did —
+    toggling, like the strip it stands in for.
+    """
+    pids = residents()
+    if pids:
+        for pid in pids:
+            try:
+                os.kill(pid, signals.SIGUSR1)
+            except OSError:
+                pass
+        return
+    if can_strip():
+        os.execv(sys.executable,
+                 [sys.executable, os.path.abspath(__file__), "--prompt"])
+    import subprocess
+    if subprocess.run(["pgrep", "-f", "foot -a sol-cm[d]"],
+                      capture_output=True).returncode == 0:
+        subprocess.run(["pkill", "-f", "foot -a sol-cm[d]"])
+        return
+    os.execvp(FOOT[0], FOOT)
+
+
+# The knock is answered before GTK is paid for: signalling a resident strip
+# needs os.kill and nothing heavier, and mod+; is pressed far more often
+# than a session is started.
+if __name__ == "__main__" and "toggle" in sys.argv[1:]:
+    knock()
+    sys.exit(0)
+
+# A knock can land before GTK has: a no-op handler set this early marks
+# SigCgt, so a knock racing the strip's own startup is absorbed rather than
+# fatal — the kernel default for either signal is terminate, and this was
+# the waybar login-kill all over again. GLib takes both signals over
+# properly once the loop is up.
+signals.signal(signals.SIGUSR1, lambda *_: None)
+signals.signal(signals.SIGUSR2, lambda *_: None)
+
+# ── GTK, if this machine has it ───────────────────────────────────────────
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, Gio, GLib, Gtk, Pango   # noqa: E402
+except (ImportError, ValueError):
+    # No GTK, no strip of our own — but the machine still gets a footer.
+    os.execvp(WAYBAR[0], WAYBAR)
+
+
+# ── sol itself ────────────────────────────────────────────────────────────
+# The places, the commands and the footer's own file live in `sol`, and
+# there must be one copy of them — loaded the way sol-menu loads it, asking
+# each candidate whether it is the real thing rather than trusting where it
+# happens to sit, because installed there is also a seven-line doorway with
+# the same name.
+MODULES = ("/usr/lib/sol/solmod.py", "/usr/local/lib/sol/solmod.py")
+
+
+def load_sol():
+    tried = []
+    beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol")
+    for path in (beside,) + MODULES + (shutil.which("sol"),):
+        if not path or not os.path.exists(path) or path in tried:
+            continue
+        tried.append(path)
+        try:
+            loader = importlib.machinery.SourceFileLoader("sol", path)
+            spec = importlib.util.spec_from_loader("sol", loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+        except Exception:
+            continue
+        if hasattr(mod, "Drift"):
+            return mod
+    raise SystemExit("sol-footer: found no copy of sol to speak for "
+                     "(looked in %s)" % ", ".join(tried or ["nowhere"]))
+
+
+sol = load_sol()
+
+
+# ── gtk-layer-shell, through ctypes like sol-menu ─────────────────────────
+LAYER_TOP = 2
+EDGE_LEFT, EDGE_RIGHT, EDGE_BOTTOM = 0, 1, 3
+KEYBOARD_NONE, KEYBOARD_EXCLUSIVE = 0, 1
+
+try:
+    _shell, gpointer = sol.layer_shell()   # one binding, owned by sol
+except OSError:
+    os.execvp(WAYBAR[0], WAYBAR)    # GTK without the shell: same fallback
+
+# The prompt vocabulary is static once sol is loaded; built once, at module
+# level, where even a Footer conjured without __init__ (the acceptance
+# probe does exactly that) can reach it.
+VOCAB = sol.completion_words()
+PVOCAB = sol.place_words()
+
+
+def make_strip(win):
+    """A bar's kind of surface: the width of the screen, HEIGHT tall at the
+    bottom edge, reserving its pixels the way the header does. The keyboard
+    mode starts at none — at rest the strip is exactly as interactive as the
+    waybar it replaces, and only an address changes that."""
+    p = gpointer(win)
+    _shell.gtk_layer_init_for_window(p)
+    _shell.gtk_layer_set_namespace(p, b"sol-footer")
+    _shell.gtk_layer_set_layer(p, LAYER_TOP)
+    for edge in (EDGE_LEFT, EDGE_RIGHT, EDGE_BOTTOM):
+        _shell.gtk_layer_set_anchor(p, edge, 1)
+    _shell.gtk_layer_set_exclusive_zone(p, HEIGHT)
+    _shell.gtk_layer_set_keyboard_mode(p, KEYBOARD_NONE)
+    return p
+
+
+# ── What the ghost says ───────────────────────────────────────────────────
+# One slot, four registers — echo, preview, completion, correction — so the
+# eye learns one place to look. The vocabulary and the phrases live in sol
+# (PHRASE, ANSWERING, PLACE_ARG, completion_words), where CMDS lives: two
+# prompts reading one table cannot complete different words or describe one
+# command two ways.
+MAX_GROWN = 10          # past this, the answer belongs in a terminal
+TEACH = "a place, a command, or a window — tab completes"
+
+
+def esc_(text):
+    return GLib.markup_escape_text(str(text))
+
+
+def span(text, colour):
+    return '<span foreground="%s">%s</span>' % (colour, esc_(text))
+
+
+class Footer:
+    def __init__(self, open_prompt=False):
+        self.mode = "rest"
+        self.buf, self.pos = "", 0
+        self.blink, self.blink_src = True, None
+        self.tab_base, self.tab_i = None, 0
+        self.error = None                  # markup the ghost shows instead
+        self.hist, self.hist_i, self.draft = self.load_history(), None, ""
+        self.wins = []                     # (needle, title, place) at open
+        self.last_echo = self.last_ghost = self.last_line = None
+        self.veiled = False                # shown only to host a prompt
+        self.last_key = 0.0                # when the cursor last earned its blink
+
+        self.win = Gtk.Window()
+        self.win.set_app_paintable(True)
+        screen = self.win.get_screen()
+        self.win.set_visual(screen.get_rgba_visual() or screen.get_system_visual())
+        self.shell = make_strip(self.win)
+
+        style = Gtk.CssProvider()
+        style.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.win.add(outer)
+
+        # The rows an answer grows, above the strip and gone at a keypress.
+        self.grown = Gtk.Label(xalign=0.0)
+        self.grown.get_style_context().add_class("grown")
+        self.grown.set_no_show_all(True)
+        outer.pack_start(self.grown, False, False, 0)
+
+        strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        strip.get_style_context().add_class("strip")
+        strip.set_size_request(-1, HEIGHT)
+        self.strip = strip
+        outer.pack_start(strip, False, False, 0)
+
+        # ☉ ▸ — the door, and in the other register the prompt it always
+        # looked like. One glyph, lit while the strip is listening.
+        self.door = Gtk.EventBox()
+        self.door.get_style_context().add_class("door")
+        cap = Gtk.Label()
+        cap.set_markup(span("☉", SUNC) + " " + span("▸", DIM))
+        self.door.add(cap)
+        self.door.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.door.connect("button-press-event", lambda *_: self.toggle())
+        strip.pack_start(self.door, False, False, 0)
+
+        self.line = Gtk.Label(xalign=0.0)
+        self.line.get_style_context().add_class("line")
+        self.line.set_no_show_all(True)
+        strip.pack_start(self.line, False, False, 0)
+
+        self.escbox = Gtk.Label(label="esc")
+        self.escbox.get_style_context().add_class("esc")
+        self.escbox.set_no_show_all(True)
+        strip.pack_end(self.escbox, False, False, 0)
+
+        self.ghost = Gtk.Label(xalign=1.0)
+        self.ghost.get_style_context().add_class("ghost")
+        self.ghost.set_ellipsize(Pango.EllipsizeMode.END)
+        self.ghost.set_no_show_all(True)
+        strip.pack_end(self.ghost, True, True, 0)
+
+        # The echo: what sol last did, clickable the way it always was.
+        self.echobox = Gtk.EventBox()
+        self.echobox.get_style_context().add_class("echo")
+        self.echo = Gtk.Label(xalign=1.0)
+        self.echo.set_ellipsize(Pango.EllipsizeMode.END)
+        self.echobox.add(self.echo)
+        self.echobox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.echobox.connect("button-press-event", lambda *_: self.open_prompt())
+        strip.pack_end(self.echobox, True, True, 0)
+
+        self.win.connect("key-press-event", self.key)
+        self.win.connect("focus-out-event", self.focus_lost)
+        self.win.connect("destroy", lambda *_: Gtk.main_quit())
+
+        # The wiring that keeps the rest register current: the file sol
+        # writes, watched rather than signalled — a resident surface can
+        # afford inotify, and misses nothing waybar's signals carried.
+        gfile = Gio.File.new_for_path(sol.LOG)
+        self.monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+        self.monitor.connect("changed", lambda *_: self.refresh_echo())
+        GLib.timeout_add_seconds(30, self.tick)
+
+        # mod+; knocks with USR1; present mode hides with USR2, the same
+        # toggle waybar answers to SIGUSR1 — a different number because the
+        # first is already the knock.
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signals.SIGUSR1, self.on_knock)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signals.SIGUSR2, self.on_chrome)
+
+        self.win.show_all()
+        self.refresh_echo()
+        if open_prompt:
+            GLib.timeout_add(120, lambda: self.open_prompt() and False)
+
+    # ── the rest register ────────────────────────────────────────────────
+    def read_last(self):
+        try:
+            with open(sol.LOG) as f:
+                said = f.read().strip()
+            age = time.time() - os.path.getmtime(sol.LOG)
+        except OSError:
+            return None, None
+        return (said or None), age
+
+    def refresh_echo(self):
+        """The echo, two-toned: the event a shade brighter than its metadata,
+        a signal in the colour of the district that sent it, and a clock that
+        coarsens — just now, then minutes — instead of ticking."""
+        said, age = self.read_last()
+        if not said or age > 900:
+            teach = sol.first_words()
+            markup = span(teach, DIM) if teach else ""
+            opacity = 1.0
+        else:
+            segs = said.split(" · ")
+            key = ""
+            if len(segs) > 1 and segs[-1].startswith(("mod+", "pinch", "swipe", "four-finger")):
+                key, segs = segs[-1], segs[:-1]
+            event = " · ".join(segs)
+            colour = FG
+            if event.startswith("✳ "):
+                place = sol.find_place(event[2:].split(" ·")[0].split()[0])
+                if place is not None:
+                    colour = place.colour
+            when = "just now" if age < 60 else "%dm" % int(age / 60)
+            markup = span(event, colour) + span(
+                (" · %s" % key if key else "") + " · %s" % when, DIM)
+            # The last minutes cool by opacity rather than ending in a cut —
+            # an ember going out, which is the sentence dark mode speaks.
+            opacity = 1.0 if age < 720 else max(0.55, 1.0 - (age - 720) / 400.0)
+        if markup != self.last_echo:
+            self.last_echo = markup
+            self.echo.set_markup(markup)
+        self.echo.set_opacity(opacity)
+
+    def tick(self):
+        self.refresh_echo()
+        return True
+
+    # ── crossing between registers ───────────────────────────────────────
+    def on_knock(self):
+        self.toggle()
+        return True
+
+    def on_chrome(self):
+        """Present mode: everything of sol goes, this strip included."""
+        if self.win.get_visible():
+            if self.mode == "prompt":
+                self.close_prompt()
+            self.win.hide()
+        else:
+            self.veiled = False     # the chrome is back for real
+            self.win.show()
+        return True
+
+    def toggle(self):
+        if self.mode == "prompt":
+            self.close_prompt()
+        else:
+            self.open_prompt()
+        return True
+
+    def open_prompt(self):
+        if self.mode == "prompt":
+            return True
+        if not self.win.get_visible():
+            # Present mode hid the strip, but mod+; still means what it
+            # means — the command line is the escape hatch a bare screen
+            # needs most. Borrow the pixels, and give them back on close.
+            self.veiled = True
+            self.win.show()
+        self.mode = "prompt"
+        self.last_key = time.monotonic()
+        self.buf, self.pos, self.error = "", 0, None
+        self.tab_base, self.hist_i = None, None
+        self.snapshot()
+        self.strip.get_style_context().add_class("hot")
+        self.door.get_style_context().add_class("open")
+        self.echobox.hide()
+        self.line.show()
+        self.ghost.show()
+        self.escbox.show()
+        _shell.gtk_layer_set_keyboard_mode(self.shell, KEYBOARD_EXCLUSIVE)
+        self.blink = True
+        self.blink_src = GLib.timeout_add(550, self.wink)
+        self.render()
+        return True
+
+    def close_prompt(self):
+        if self.mode != "prompt":
+            return
+        self.mode = "rest"
+        _shell.gtk_layer_set_keyboard_mode(self.shell, KEYBOARD_NONE)
+        if self.blink_src:
+            GLib.source_remove(self.blink_src)
+            self.blink_src = None
+        self.grown.hide()
+        self.line.hide()
+        self.ghost.hide()
+        self.escbox.hide()
+        self.echobox.show_all()
+        self.strip.get_style_context().remove_class("hot")
+        self.door.get_style_context().remove_class("open")
+        self.refresh_echo()
+        if self.veiled:
+            self.veiled = False
+            self.win.hide()         # present mode gets its bare screen back
+
+    def focus_lost(self, *_):
+        """Click-away closes the prompt — the thing a terminal window above
+        the strip could never do, and the reason a grab feels like one."""
+        if self.mode == "prompt":
+            self.close_prompt()
+        return False
+
+    def snapshot(self):
+        """The windows as they stand when the prompt opens, for the fallback
+        chain's last link: a word that is no command and no place might be a
+        window, and the ghost should say which one and where it lives.
+
+        Fetched off the first paint: the prompt renders before the
+        compositor is asked, so a busy driftwm cannot stall the open. The
+        needle is built the way `sol find` builds its haystack — place,
+        app id, title — so the ghost and the flight read the same words.
+        And BaseException, because Drift leaves through SystemExit when the
+        socket is gone, which `except Exception` waves straight past a
+        half-opened prompt."""
+        self.wins = []
+
+        def fetch():
+            try:
+                st = sol.Drift().state()
+                claims = sol.read_claims()
+                for w in sol.real_windows(st):
+                    title = str(w.get("title") or w.get("app_id") or "")
+                    place = sol.belongs_to(w, claims)
+                    needle = "%s %s %s" % (place.name if place else "adrift",
+                                           w.get("app_id") or "", title)
+                    self.wins.append((needle.lower(), title, place))
+            except BaseException:
+                pass                # no compositor: no window fallback, only
+            return False
+        GLib.idle_add(fetch)
+
+    def wink(self):
+        # A cursor blinks to be found, and after ten idle seconds it has
+        # been. Holding solid commits nothing — the markup memo sees to it —
+        # on a surface class measured at ~32ms of CPU per commit, flat;
+        # the next keypress starts the pulse again.
+        if time.monotonic() - self.last_key > 10.0:
+            if not self.blink:
+                self.blink = True
+                self.render_line()
+            return True
+        self.blink = not self.blink
+        self.render_line()
+        return True
+
+    # ── the line and its ghost ───────────────────────────────────────────
+    def words(self):
+        return VOCAB
+
+    def place_words(self):
+        return PVOCAB
+
+    def render(self):
+        self.render_line()
+        self.render_ghost()
+
+    def render_line(self):
+        t, p = self.buf, self.pos
+        if self.blink:
+            if p < len(t):
+                m = esc_(t[:p]) + \
+                    '<span background="%s" foreground="#16161e">%s</span>' % (
+                        SUNC, esc_(t[p])) + esc_(t[p + 1:])
+            else:
+                m = esc_(t) + '<span background="%s"> </span>' % SUNC
+        else:
+            m = esc_(t) if p < len(t) else esc_(t) + " "
+        markup = '<span foreground="%s">%s</span>' % (FG, m)
+        if markup != self.last_line:
+            self.last_line = markup
+            self.line.set_markup(markup)
+
+    def resolve(self, argv):
+        """What enter would do with this line: the same chain it will
+        actually take — command, then place, then window — decided once so
+        the ghost and the keypress can never disagree."""
+        head = argv[0]
+        if head in sol.CMDS:
+            return "cmd", argv
+        place = sol.find_place(head)
+        if place is not None:
+            return "place", place
+        # The whole line against the same haystack `sol find` will search —
+        # matching only the head here let the ghost promise flights the
+        # keypress would then refuse, silently.
+        want = " ".join(argv).lower()
+        hit = next((w for w in self.wins if want in w[0]), None)
+        if hit is not None:
+            return "window", hit
+        return "none", None
+
+    def render_ghost(self):
+        if self.error is not None:
+            markup = self.error
+        elif not self.buf.strip():
+            teach = "" if os.path.exists(sol.SPOKEN) else TEACH
+            markup = span(teach, DIM) if teach else ""
+        else:
+            markup = self.preview()
+        if markup != self.last_ghost:
+            self.last_ghost = markup
+            self.ghost.set_markup(markup)
+
+    def preview(self):
+        argv = self.buf.split()
+        kind, what = self.resolve(argv)
+        if kind == "place":
+            return self.place_preview(what)
+        if kind == "window":
+            _, title, place = what
+            where = span(" · ", DIM) + span(place.name, place.colour) \
+                if place is not None else span(" · adrift", DIM)
+            return span("→ fly to “%s”" % title[:36], DIM) + where
+        if kind == "cmd":
+            head = argv[0]
+            if head in sol.PLACE_ARG and len(argv) > 1:
+                place = sol.find_place(argv[-1])
+                if place is not None and head in ("goto", "send"):
+                    return self.place_preview(place, send=head == "send")
+            phrase = sol.PHRASE.get(head, "sol %s" % head)
+            key = sol.key_of(argv)
+            return span("→ %s" % phrase, DIM) + \
+                (span(" · %s" % key, DIMMER) if key else "")
+        # No command, no place, no window: the one moment a hint is
+        # guaranteed an audience, so the nearest real word rides the slot.
+        near = difflib.get_close_matches(argv[0], self.words(), n=1, cutoff=0.5)
+        fix = span(" — tab takes %s?" % near[0], DIM) if near else ""
+        return '<span foreground="%s">no such command</span>%s' % (ERR, fix)
+
+    def place_preview(self, place, send=False):
+        verb = "send to" if send else "go to"
+        # The key comes from key_of, like every other surface's accelerator
+        # column — a locally derived copy taught stale keys the moment the
+        # binding moved.
+        key = sol.key_of(["send" if send else "goto",
+                          "sun" if place is sol.SUN else str(place.n)])
+        return span("→ %s " % verb, DIM) + span(place.name, place.colour) + \
+            (span(" · %s" % key, DIMMER) if key else "")
+
+    # ── completion ───────────────────────────────────────────────────────
+    def complete(self):
+        argv = self.buf.split()
+        if not argv or self.buf.endswith(" "):
+            return
+        if len(argv) == 1:
+            pool = self.words()
+        elif argv[0] in sol.PLACE_ARG:
+            pool = self.place_words()
+        else:
+            return
+        word = argv[-1] if self.tab_base is None else self.tab_base
+        cands = sorted(set(w for w in pool if w.startswith(word)))
+        if not cands:
+            cands = difflib.get_close_matches(word, pool, n=1, cutoff=0.5)
+            if not cands:
+                return
+        if self.tab_base is None:
+            self.tab_base, self.tab_i = word, 0
+        else:
+            self.tab_i += 1
+        pick = cands[self.tab_i % len(cands)]
+        argv[-1] = pick
+        self.buf = " ".join(argv)
+        self.pos = len(self.buf)
+        self.error = None
+        self.render()
+
+    # ── history ──────────────────────────────────────────────────────────
+    def hist_path(self):
+        return os.path.join(sol.STATE, "history")
+
+    def load_history(self):
+        try:
+            with open(self.hist_path()) as f:
+                return [l.rstrip("\n") for l in f if l.strip()][-500:]
+        except OSError:
+            return []
+
+    def remember(self, line):
+        if self.hist and self.hist[-1] == line:
+            return
+        self.hist.append(line)
+        try:
+            os.makedirs(sol.STATE, exist_ok=True)
+            with open(self.hist_path(), "w") as f:
+                f.write("\n".join(self.hist[-500:]) + "\n")
+        except OSError:
+            pass
+
+    def recall(self, step):
+        if not self.hist:
+            return
+        if self.hist_i is None:
+            if step > 0:
+                return
+            self.draft, self.hist_i = self.buf, len(self.hist) - 1
+        else:
+            self.hist_i += step
+        if self.hist_i >= len(self.hist):
+            self.buf, self.hist_i = self.draft, None
+        else:
+            self.hist_i = max(0, self.hist_i)
+            self.buf = self.hist[self.hist_i]
+        self.pos = len(self.buf)
+        self.error = None
+        self.render()
+
+    # ── keys ─────────────────────────────────────────────────────────────
+    def key(self, _w, ev):
+        if self.mode != "prompt":
+            return False
+        name = Gdk.keyval_name(ev.keyval) or ""
+        ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
+        self.last_key = time.monotonic()
+        # An answer on screen yields to the next keypress — the pixels go
+        # back, and the key still means what it was going to mean.
+        if self.grown.get_visible() and name not in ("Shift_L", "Shift_R"):
+            self.grown.hide()
+        if name == "Escape" or (ctrl and name in ("c", "g")):
+            self.close_prompt()
+            return True
+        if name in ("Return", "KP_Enter"):
+            self.submit()
+            return True
+        if name == "Tab":
+            self.complete()
+            return True
+        self.tab_base = None
+        if name == "Up" or (ctrl and name == "p"):
+            self.recall(-1)
+            return True
+        if name == "Down" or (ctrl and name == "n"):
+            self.recall(1)
+            return True
+        if name == "BackSpace":
+            if self.pos:
+                self.buf = self.buf[:self.pos - 1] + self.buf[self.pos:]
+                self.pos -= 1
+        elif name == "Delete":
+            self.buf = self.buf[:self.pos] + self.buf[self.pos + 1:]
+        elif name == "Left":
+            self.pos = max(0, self.pos - 1)
+        elif name == "Right":
+            self.pos = min(len(self.buf), self.pos + 1)
+        elif name == "Home" or (ctrl and name == "a"):
+            self.pos = 0
+        elif name == "End" or (ctrl and name == "e"):
+            self.pos = len(self.buf)
+        elif ctrl and name == "u":
+            self.buf, self.pos = self.buf[self.pos:], 0
+        elif ctrl and name == "w":
+            head = self.buf[:self.pos].rstrip()
+            cut = head.rfind(" ") + 1
+            self.buf = self.buf[:cut] + self.buf[self.pos:]
+            self.pos = cut
+        else:
+            ch = Gdk.keyval_to_unicode(ev.keyval)
+            if not ch or ch < 32 or ctrl:
+                return True
+            self.buf = self.buf[:self.pos] + chr(ch) + self.buf[self.pos:]
+            self.pos += 1
+        self.error = None
+        self.hist_i = None
+        self.render()
+        return True
+
+    # ── enter ────────────────────────────────────────────────────────────
+    def submit(self):
+        line = self.buf.strip()
+        if not line:
+            self.close_prompt()
+            return
+        argv = line.split()
+        kind, what = self.resolve(argv)
+        if kind == "place":
+            argv = ["goto"] + argv
+        elif kind == "window":
+            argv = ["find"] + argv
+        elif kind == "none":
+            # The line stays yours: the ghost turns corrective and nothing
+            # is taken away — an error costs a glance, not two seconds.
+            self.error = self.preview()
+            self.render_ghost()
+            return
+        self.remember(line)
+        answering = argv[0] in sol.ANSWERING \
+            or (argv[0] == "signal" and len(argv) == 1)
+        if answering:
+            self.ask(argv)
+            return
+        self.run_quiet(argv)
+        self.close_prompt()
+
+    def run_quiet(self, argv):
+        """Fire a verb whose output is not the point — but a refusal still
+        reports. The prompt closes at once; if the command then exits with
+        a complaint, its first line lands in the footer file, and the echo
+        (the surface that was staying anyway) shows it. The old foot
+        terminal printed errors by simply existing; a strip that discards
+        them turns every typo into a shrug."""
+        try:
+            proc = Gio.Subprocess.new(
+                ["sol"] + argv,
+                Gio.SubprocessFlags.STDOUT_SILENCE
+                | Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            sol.note_failure(["sol"] + argv, OSError(str(e)))
+            return
+
+        def done(p, res):
+            try:
+                _, _, err = p.communicate_utf8_finish(res)
+            except GLib.Error:
+                return
+            if p.get_if_exited() and p.get_exit_status() == 0:
+                return
+            said = next((l for l in (err or "").splitlines() if l.strip()), "")
+            if said:
+                sol.footer(said.strip())   # the LOG monitor repaints the echo
+        proc.communicate_utf8_async(None, None, done)
+
+    def ask(self, argv):
+        """A question, asked without freezing the strip that is asking it.
+
+        The answer lands where it fits: one line goes into the echo — the
+        surface that was staying anyway — and more rows grow above the strip
+        until the next keypress. Past ten, the honest answer is that a
+        terminal is the right room for it, and the strip says so."""
+        try:
+            proc = Gio.Subprocess.new(
+                ["sol"] + argv,
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+        except GLib.Error:
+            self.error = '<span foreground="%s">sol did not start</span>' % ERR
+            self.render_ghost()
+            return
+
+        def done(p, res):
+            try:
+                _, out, _ = p.communicate_utf8_finish(res)
+            except GLib.Error:
+                out = ""
+            lines = [l for l in (out or "").splitlines() if l.strip()]
+            if self.mode != "prompt":
+                return
+            if len(lines) <= 1:
+                sol.footer("%s → %s" % (" ".join(argv),
+                                        lines[0].strip() if lines else "done"))
+                self.close_prompt()
+                return
+            shown = lines[:MAX_GROWN]
+            body = "\n".join(span(l, "#a9b1d6") for l in shown)
+            if len(lines) > MAX_GROWN:
+                body += "\n" + span("… %d more — a terminal has the rest"
+                                    % (len(lines) - MAX_GROWN), DIM)
+            self.grown.set_markup(body)
+            self.grown.show()
+            self.buf, self.pos = "", 0
+            self.render()
+        proc.communicate_utf8_async(None, None, done)
+
+
+def main():
+    # One strip, ever: a second resident replaces the first rather than
+    # stacking a twin behind it — which is what a crashed-and-restarted
+    # autostart would otherwise leave.
+    for pid in residents():
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
+    GLib.set_prgname("sol-footer")
+    Footer(open_prompt="--prompt" in sys.argv[1:])
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()
